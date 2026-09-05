@@ -144,6 +144,33 @@ def modify_child_zone(zone: dns.zone.Zone, mode: str) -> int:
     )
 
 
+def save_zone(
+    zone: dns.zone.Zone,
+    output_path: Path,
+    sorted_names: bool = True,
+    relativize: bool = False,
+    want_origin: bool = True,
+    chunksize: int = 0,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        if want_origin and zone.origin is not None:
+            f.write(f"$ORIGIN {zone.origin.to_text()}\n")
+        names = list(zone.keys())
+        if sorted_names:
+            names.sort()
+        for name in names:
+            f.write(
+                zone[name].to_text(
+                    name,
+                    origin=zone.origin,  # pyright: ignore
+                    relativize=relativize,  # pyright: ignore
+                    chunksize=chunksize,  # pyright: ignore
+                )
+            )
+            f.write("\n")
+
+
 def main() -> None:
     args = parse_args()
     origin = make_absolute_name(args.origin, dns.name.root)
@@ -161,8 +188,7 @@ def main() -> None:
     if args.mode != "success" and not changed:
         raise SystemExit(f"対象レコードが見つかりませんでした: {MODES[args.mode]}")
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    zone.to_file(str(args.output), sorted=True, relativize=False, want_origin=True)
+    save_zone(zone, args.output, sorted_names=True, relativize=False, want_origin=True, chunksize=0)
     print(f"{MODES[args.mode]}: {args.output} (変更レコード数: {changed})")
 
 
