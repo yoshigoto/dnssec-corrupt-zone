@@ -57,8 +57,8 @@ python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode
 
 ```powershell
 python corrupt_zone.py `
-  --input zones/example.test.signed `
-  --output zones-out/example.test.keytag.zone `
+  --input example.test.signed `
+  --output example.test.keytag.zone `
   --origin example.test. `
   --mode ds-keytag-mismatch `
   --target-name keytag.ds.error.example.test.
@@ -67,16 +67,16 @@ python corrupt_zone.py `
 同じ親ゾーンから、DS の Digest 不整合と DS の署名破損を作成する例です。
 
 ```powershell
-python corrupt_zone.py -i zones/example.test.signed -o zones-out/example.test.hash.zone -d example.test. -m ds-hash-mismatch -t hash.ds.error.example.test.
-python corrupt_zone.py -i zones/example.test.signed -o zones-out/example.test.ds-sign.zone -d example.test. -m ds-rrsig-corrupt -t sign.ds.error.example.test.
+python corrupt_zone.py -i example.test.signed -o example.test.hash.zone -d example.test. -m ds-hash-mismatch -t hash.ds.error.example.test.
+python corrupt_zone.py -i example.test.signed -o example.test.ds-sign.zone -d example.test. -m ds-rrsig-corrupt -t sign.ds.error.example.test.
 ```
 
 子ゾーン `sign.dnskey.error.example.test.` の DNSKEY 署名を壊します。子ゾーンでは `--target-name` は不要です。
 
 ```powershell
 python corrupt_zone.py `
-  --input zones/sign.dnskey.error.example.test.signed `
-  --output zones-out/sign.dnskey.error.example.test.zone `
+  --input sign.dnskey.error.example.test.signed `
+  --output sign.dnskey.error.example.test.zone `
   --origin sign.dnskey.error.example.test. `
   --mode dnskey-rrsig-corrupt
 ```
@@ -84,7 +84,7 @@ python corrupt_zone.py `
 有効期限切れのケースは `--mode dnskey-rrsig-expired` を指定します。
 
 ```powershell
-python corrupt_zone.py -i zones/expire.dnskey.error.example.test.signed -o zones-out/expire.dnskey.error.example.test.zone -d expire.dnskey.error.example.test. -m dnskey-rrsig-expired
+python corrupt_zone.py -i expire.dnskey.error.example.test.signed -o expire.dnskey.error.example.test.zone -d expire.dnskey.error.example.test. -m dnskey-rrsig-expired
 ```
 
 ## NSD への反映
@@ -94,7 +94,7 @@ python corrupt_zone.py -i zones/expire.dnskey.error.example.test.signed -o zones
 ```text
 zone:
     name: "sign.dnskey.error.example.test."
-    zonefile: "zones-out/sign.dnskey.error.example.test.zone"
+    zonefile: "sign.dnskey.error.example.test.zone"
 ```
 
 変更後は `nsd-checkconf` で設定とゾーンを確認し、NSD を再読み込みします。公開環境では、失敗パターン用の委任先を正常系とは別のゾーンとして構成してください。
@@ -115,6 +115,6 @@ zone:
 1. python corrupt_zone.py -i example.test.ds-keytag.zone -o example.test.ds-hash.zone -m ds-hash-mismatch -d example.test. -t hash.ds.error.example.test.
 1. cp -p example.test.ds-hash.zone example.test.zone
 1. example.test.zone を署名
-1. python corrupt_zone.py -i example.test.zone.signed -o example.test.zone.signed1 -m ds-rrsig-corrupt -d example.test. -t sign.ds.error.example.test.
-1. cp -p example.test.zone.signed1 example.test.zone.signed
+1. python corrupt_zone.py -i example.test.zone.signed -o example.test.zone.ds-rrsig.signed -m ds-rrsig-corrupt -d example.test. -t sign.ds.error.example.test.
+1. cp -p example.test.zone.ds-rrsig.signed example.test.zone.signed
 1. 権威サーバーでゾーンファイルを再読み込み
