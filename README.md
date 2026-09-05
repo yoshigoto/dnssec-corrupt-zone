@@ -104,3 +104,17 @@ zone:
 - 出力ゾーンは意図的に DNSSEC 検証に失敗します。通常の本番ゾーンには使用しないでください。
 - このスクリプトは DNSSEC の署名を再計算しません。加工後の `DS` または `RRSIG` の整合性が壊れることが目的です。
 - 署名アルゴリズムに依存しない加工のため、RSASHA256、ECDSAP256SHA256、ED25519、ED448 の各ケースに利用できます。
+
+## 親ゾーンの更新について
+
+親ゾーンについては、`DS` の Key Tag やハッシュ値を先に変更してから親ゾーンを署名することで、個別に事象を発生させることができます。
+
+1. example.test.zone を編集
+1. cp -p example.test.zone example.test.zone.orig
+1. python corrupt_zone.py -i example.test.zone -o example.test.ds-keytag.zone -m ds-keytag-mismatch -d example.test. -t keytag.ds.error.example.test.
+1. python corrupt_zone.py -i example.test.ds-keytag.zone -o example.test.ds-hash.zone -m ds-hash-mismatch -d example.test. -t hash.ds.error.example.test.
+1. cp -p example.test.ds-hash.zone example.test.zone
+1. example.test.zone を署名
+1. python corrupt_zone.py -i example.test.zone.signed -o example.test.zone.signed1 -m ds-rrsig-corrupt -d example.test. -t sign.ds.error.example.test.
+1. cp -p example.test.zone.signed1 example.test.zone.signed
+1. 権威サーバーでゾーンファイルを再読み込み
