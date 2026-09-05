@@ -110,11 +110,11 @@ zone:
 親ゾーンについては、`DS` の Key Tag やハッシュ値を先に変更してから親ゾーンを署名することで、個別に事象を発生させることができます。
 
 1. example.test.zone を編集
-1. cp -p example.test.zone example.test.zone.orig
-1. python corrupt_zone.py -i example.test.zone -o example.test.ds-keytag.zone -m ds-keytag-mismatch -d example.test. -t keytag.ds.error.example.test.
-1. python corrupt_zone.py -i example.test.ds-keytag.zone -o example.test.ds-hash.zone -m ds-hash-mismatch -d example.test. -t hash.ds.error.example.test.
-1. cp -p example.test.ds-hash.zone example.test.zone
+1. `cp -p example.test.zone example.test.zone.orig`
+1. `python corrupt_zone.py -i example.test.zone -o example.test.ds-keytag.zone -m ds-keytag-mismatch -d example.test. -t keytag.ds.error.example.test.`
+1. `python corrupt_zone.py -i example.test.ds-keytag.zone -o example.test.ds-hash.zone -m ds-hash-mismatch -d example.test. -t hash.ds.error.example.test.`
+1. `cp -p example.test.ds-hash.zone example.test.zone`
 1. example.test.zone を署名
-1. python corrupt_zone.py -i example.test.zone.signed -o example.test.zone.ds-rrsig.signed -m ds-rrsig-corrupt -d example.test. -t sign.ds.error.example.test.
-1. cp -p example.test.zone.ds-rrsig.signed example.test.zone.signed
+1. `python corrupt_zone.py -i example.test.zone.signed -o example.test.zone.ds-rrsig.signed -m ds-rrsig-corrupt -d example.test. -t sign.ds.error.example.test.`
+1. `cp -p example.test.zone.ds-rrsig.signed example.test.zone.signed`
 1. 権威サーバーでゾーンファイルを再読み込み
