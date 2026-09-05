@@ -38,6 +38,12 @@ def parse_args() -> argparse.Namespace:
         "--target-name",
         help="親ゾーンで DS を変更する委任先名。--mode の ds-* では必須",
     )
+    parser.add_argument(
+        "-s",
+        "--increment-serial",
+        action="store_true",
+        help="SOA レコードの Serial をインクリメントする",
+    )
     return parser.parse_args()
 
 
@@ -110,6 +116,21 @@ def alter_rrsig_signature(rdata: dns.rdata.Rdata) -> dns.rdata.Rdata:
 
 def expire_rrsig(rdata: dns.rdata.Rdata) -> dns.rdata.Rdata:
     return rdata.replace(expiration=EXPIRED_AT)
+
+
+def increment_soa_serial(rdata: dns.rdata.Rdata) -> dns.rdata.Rdata:
+    serial = getattr(rdata, "serial", None)
+    if not isinstance(serial, int):
+        raise TypeError("SOA レコードではありません")
+    return rdata.replace(serial=(serial + 1) % (2**32))
+
+
+def increment_zone_soa(zone: dns.zone.Zone) -> int:
+    if zone.origin is None:
+        raise ValueError("ゾーンオリジンがありません")
+    return replace_matching_rdatas(
+        zone, zone.origin, dns.rdatatype.SOA, lambda _rdata: True, increment_soa_serial,
+    )
 
 
 def modify_parent_zone(zone: dns.zone.Zone, mode: str, target_name: str) -> int:
@@ -187,6 +208,13 @@ def main() -> None:
 
     if args.mode != "success" and not changed:
         raise SystemExit(f"対象レコードが見つかりませんでした: {MODES[args.mode]}")
+
+    if args.increment_serial:
+        soa_changed = increment_zone_soa(zone)
+        if not soa_changed:
+            print("警告: SOA レコードが見つかりませんでした")
+        else:
+            print("SOA Serial をインクリメントしました")
 
     save_zone(zone, args.output, sorted_names=True, relativize=False, want_origin=True, chunksize=0)
     print(f"{MODES[args.mode]}: {args.output} (変更レコード数: {changed})")

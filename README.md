@@ -25,7 +25,7 @@ uv pip install -r requirements.txt
 ## 使い方
 
 ```text
-python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode MODE [--target-name NAME]
+python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode MODE [--target-name NAME] [--increment-serial]
 ```
 
 | 引数 | 説明 |
@@ -35,6 +35,7 @@ python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode
 | `--origin`, `-d` | 入力ゾーンのオリジン。末尾の `.` は省略可能 |
 | `--mode`, `-m` | 下記の検証ケース |
 | `--target-name`, `-t` | 親ゾーンの `DS` を変更する委任先の名前。`ds-*` モードでは必須 |
+| `--increment-serial`, `-s` | SOA レコードの Serial を 1 インクリメントする |
 
 出力先ディレクトリが存在しない場合は作成されます。対象レコードが見つからない場合、ゾーンを出力せずエラー終了します。
 
