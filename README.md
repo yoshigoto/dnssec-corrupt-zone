@@ -1,6 +1,6 @@
 # dnssec-corrupt-zone
 
-署名済みの DNSSEC ゾーンファイルを検証用に加工する Python スクリプトです。親ゾーンの `DS` レコードまたは子ゾーンの `DNSKEY` に対する署名データ `RRSIG` を意図的に壊します。[DNSSEC委任状態検証ツール](https://www.on-link.jp/dnssecvalidator/) で、実際に壊れた事例を確認することができます。
+署名済みの DNSSEC ゾーンファイルを検証用に加工する Python スクリプトです。親ゾーンの `DS` レコードまたは子ゾーンの `DNSKEY` に対する署名データ `RRSIG` を意図的に壊します。[DNSSEC委任状態検証ツール](https://www.on-link.jp/dnssec-validator/) で、実際に壊れた事例を確認することができます。
 
 このツールはゾーンへの署名や NSD の再読み込みを行いません。必要に応じて署名前、または署名済みのゾーンファイルを用意し、このツールで出力されたゾーンファイルを NSD で読み込ませてください。
 
