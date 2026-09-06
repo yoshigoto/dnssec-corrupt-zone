@@ -108,6 +108,39 @@ zone:
 - このスクリプトは DNSSEC の署名を再計算しません。加工後の `DS` または `RRSIG` の整合性が壊れることがこのスクリプトの目的です。
 - 署名アルゴリズムに依存しない加工のため、RSASHA256、ECDSAP256SHA256、ED25519、ED448 の各ケースに利用できます。
 
+## ゾーンファイルへの署名について
+
+未署名のゾーンファイルから署名済みゾーンファイルを生成するためのシェルスクリプト `dnssec_sign_zone.sh` を利用できます。
+このスクリプトは `ldns-signzone` を用いて、指定された鍵ディレクトリから KSK（フラグ 257）および ZSK（フラグ 256）を自動識別してゾーンに署名します。
+
+### 使い方
+
+```bash
+./dnssec_sign_zone.sh <zone_file_name> [key_dir] [zone_dir]
+```
+
+| 引数 | 説明 | デフォルト値 |
+| --- | --- | --- |
+| `<zone_file_name>` | 署名対象のゾーンファイル名 | (必須) |
+| `[key_dir]` | KSK / ZSK 鍵ファイルが配置されているディレクトリ | `/usr/local/etc/nsd/keys` |
+| `[zone_dir]` | ゾーンファイルが配置されているディレクトリ | `/usr/local/etc/nsd/zone` |
+
+### 実行例
+
+デフォルトのディレクトリ設定で署名する場合:
+
+```bash
+./dnssec_sign_zone.sh example.test.zone
+```
+
+鍵ディレクトリやゾーンファイルのディレクトリを指定する場合:
+
+```bash
+./dnssec_sign_zone.sh example.test.zone /path/to/keys /path/to/zones
+```
+
+実行が成功すると、対象のゾーンファイルが存在するディレクトリに `<zone_file_name>.signed` （例: `example.test.zone.signed`）が生成されます。
+
 ## 親ゾーンの更新について
 
 親ゾーンについては、`DS` の Key Tag やハッシュ値を先に変更してから親ゾーンを署名することで、個別に事象を発生させることができます。
@@ -117,7 +150,7 @@ zone:
 1. `python corrupt_zone.py -i example.test.zone -o example.test.ds-keytag.zone -m ds-keytag-mismatch -d example.test. -t keytag.ds.error.example.test.`
 1. `python corrupt_zone.py -i example.test.ds-keytag.zone -o example.test.ds-hash.zone -m ds-hash-mismatch -d example.test. -t hash.ds.error.example.test.`
 1. `cp -p example.test.ds-hash.zone example.test.zone`
-1. example.test.zone を署名
+1. example.test.zone を署名 (`dnssec_sign_zone.sh` を利用)
 1. `python corrupt_zone.py -i example.test.zone.signed -o example.test.zone.ds-rrsig.signed -m ds-rrsig-corrupt -d example.test. -t sign.ds.error.example.test.`
 1. `cp -p example.test.zone.ds-rrsig.signed example.test.zone.signed`
 1. 権威サーバーでゾーンファイルを再読み込み

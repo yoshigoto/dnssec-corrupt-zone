@@ -61,4 +61,3 @@ fi
 ldns-signzone -f "$SIGNED_ZONE_FILE" "$ZONE_FILE" "$ZSK_BASE" "$KSK_BASE"
 
 echo "Success: Signed zone file created at $SIGNED_ZONE_FILE"
-
