@@ -3,7 +3,7 @@ set -e
 
 # 引数チェック
 if [ -z "$1" ]; then
-    echo "Usage: $0 <zone_file_name>" >&2
+    echo "Usage: $0 <zone_file_name> [key_dir] [zone_dir]" >&2
     exit 1
 fi
 
@@ -11,8 +11,8 @@ FILE_NAME="$1"
 DOMAIN=`echo $1 | sed 's/.zone//g'`
 
 # ディレクトリ定義
-KEY_DIR="/usr/local/etc/nsd/keys"
-ZONE_DIR="/usr/local/etc/nsd/zone"
+KEY_DIR="${2:-/usr/local/etc/nsd/keys}"
+ZONE_DIR="${3:-/usr/local/etc/nsd/zone}"
 
 # ファイルパス定義
 ZONE_FILE="${ZONE_DIR}/${FILE_NAME}"
