@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from collections.abc import Callable
 from pathlib import Path
 
+import dns.dnssec
 import dns.name
 import dns.rdata
 import dns.rdataclass
@@ -21,6 +23,8 @@ MODES = {
     "ds-rrsig-corrupt": "親ゾーン: DS を覆う RRSIG を破損させる",
     "dnskey-rrsig-corrupt": "子ゾーン: DNSKEY を覆う RRSIG を破損させる",
     "dnskey-rrsig-expired": "子ゾーン: DNSKEY を覆う RRSIG を期限切れにする",
+    "nsec-cover-mismatch": "子ゾーン: 指定名を覆う NSEC のカバー範囲を壊す",
+    "nsec3-cover-mismatch": "子ゾーン: 指定名を覆う NSEC3 のカバー範囲を壊す",
 }
 EXPIRED_AT = 1262304000  # 2010-01-01T00:00:00Z
 
@@ -36,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-t",
         "--target-name",
-        help="親ゾーンで DS を変更する委任先名。--mode の ds-* では必須",
+        help="加工対象の名前。--mode の ds-*、nsec-* では必須",
     )
     parser.add_argument(
         "-s",
@@ -133,6 +137,84 @@ def increment_zone_soa(zone: dns.zone.Zone) -> int:
     )
 
 
+def name_is_covered(
+    owner: dns.name.Name, next_name: dns.name.Name, target: dns.name.Name
+) -> bool:
+    if owner < next_name:
+        return owner < target < next_name
+    if owner > next_name:
+        return target > owner or target < next_name
+    return False
+
+
+def alter_nsec_coverage(rdata: dns.rdata.Rdata, owner: dns.name.Name) -> dns.rdata.Rdata:
+    return rdata.replace(next=owner)
+
+
+def nsec3_hash_from_owner(owner: dns.name.Name) -> bytes:
+    encoded_hash = owner.labels[0].decode("ascii").upper()
+    normal_base32 = encoded_hash.translate(
+        str.maketrans("0123456789ABCDEFGHIJKLMNOPQRSTUV", "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
+    )
+    return base64.b32decode(normal_base32 + "=" * (-len(normal_base32) % 8))
+
+
+def modify_nsec_coverage(zone: dns.zone.Zone, target_name: str) -> int:
+    if zone.origin is None:
+        raise ValueError("ゾーンオリジンがありません")
+    target = make_absolute_name(target_name, zone.origin)
+    for owner, node in zone.nodes.items():
+        absolute_owner = owner.derelativize(zone.origin)
+        for rdataset in node.rdatasets:
+            if rdataset.rdclass != IN or rdataset.rdtype != dns.rdatatype.NSEC:
+                continue
+            original = list(rdataset)
+            matching = [
+                name_is_covered(absolute_owner, rdata.next, target) for rdata in original
+            ]
+            if any(matching):
+                rdataset.clear()
+                for rdata, matches in zip(original, matching):
+                    rdataset.add(alter_nsec_coverage(rdata, absolute_owner) if matches else rdata)
+                return sum(matching)
+    return 0
+
+
+def modify_nsec3_coverage(zone: dns.zone.Zone, target_name: str) -> int:
+    if zone.origin is None:
+        raise ValueError("ゾーンオリジンがありません")
+    target = make_absolute_name(target_name, zone.origin)
+    for owner, node in zone.nodes.items():
+        absolute_owner = owner.derelativize(zone.origin)
+        for rdataset in node.rdatasets:
+            if rdataset.rdclass != IN or rdataset.rdtype != dns.rdatatype.NSEC3:
+                continue
+            original = list(rdataset)
+            matching = [
+                name_is_covered(
+                    absolute_owner,
+                    rdata.next_name(zone.origin),
+                    dns.name.from_text(
+                        dns.dnssec.nsec3_hash(
+                            target, rdata.salt, rdata.iterations, rdata.algorithm
+                        ),
+                        zone.origin,
+                    ),
+                )
+                for rdata in original
+            ]
+            if any(matching):
+                rdataset.clear()
+                for rdata, matches in zip(original, matching):
+                    rdataset.add(
+                        rdata.replace(next=nsec3_hash_from_owner(absolute_owner))
+                        if matches
+                        else rdata
+                    )
+                return sum(matching)
+    return 0
+
+
 def modify_parent_zone(zone: dns.zone.Zone, mode: str, target_name: str) -> int:
     if zone.origin is None:
         raise ValueError("ゾーンオリジンがありません")
@@ -151,9 +233,17 @@ def modify_parent_zone(zone: dns.zone.Zone, mode: str, target_name: str) -> int:
     )
 
 
-def modify_child_zone(zone: dns.zone.Zone, mode: str) -> int:
+def modify_child_zone(zone: dns.zone.Zone, mode: str, target_name: str | None) -> int:
     if zone.origin is None:
         raise ValueError("ゾーンオリジンがありません")
+    if mode == "nsec-cover-mismatch":
+        if target_name is None:
+            raise ValueError("対象名がありません")
+        return modify_nsec_coverage(zone, target_name)
+    if mode == "nsec3-cover-mismatch":
+        if target_name is None:
+            raise ValueError("対象名がありません")
+        return modify_nsec3_coverage(zone, target_name)
     if mode == "dnskey-rrsig-corrupt":
         return replace_matching_rdatas(
             zone, zone.origin, dns.rdatatype.RRSIG,
@@ -204,7 +294,9 @@ def main() -> None:
             raise SystemExit("--mode の ds-* では --target-name が必要です")
         changed = modify_parent_zone(zone, args.mode, args.target_name)
     else:
-        changed = modify_child_zone(zone, args.mode)
+        if args.mode.startswith("nsec") and not args.target_name:
+            raise SystemExit("--mode の nsec-* では --target-name が必要です")
+        changed = modify_child_zone(zone, args.mode, args.target_name)
 
     if args.mode != "success" and not changed:
         raise SystemExit(f"対象レコードが見つかりませんでした: {MODES[args.mode]}")

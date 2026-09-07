@@ -36,7 +36,7 @@ python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode
 | `--output`, `-o` | NSD に読み込ませる加工後のゾーンファイル |
 | `--origin`, `-d` | 入力ゾーンのオリジン (末尾の `.` は省略可能) |
 | `--mode`, `-m` | 後述する検証ケース |
-| `--target-name`, `-t` | 親ゾーンの `DS` を変更する委任先の名前 (`ds-*` モードでは必須) |
+| `--target-name`, `-t` | 加工対象の名前 (`ds-*`、`nsec-*` モードでは必須) |
 | `--increment-serial`, `-s` | SOA レコードの Serial を 1 インクリメントする |
 
 出力先ディレクトリが存在しない場合は作成されます。対象レコードが見つからない場合、ゾーンを出力せずエラー終了します。
@@ -51,8 +51,14 @@ python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode
 | `ds-rrsig-corrupt` | 親 | 委任先 `DS` の電子署名データである `RRSIG` の署名値を破損する | DSリソースレコードの検証失敗 |
 | `dnskey-rrsig-corrupt` | 子 | ゾーン頂点の `DNSKEY` の電子署名データである `RRSIG` の署名値を破損する | DNSKEYリソースレコードの検証失敗 |
 | `dnskey-rrsig-expired` | 子 | ゾーン頂点の `DNSKEY` の電子署名データである `RRSIG` の有効期限を `2010-01-01T00:00:00Z` にする | DNSKEYリソースレコードの検証失敗（有効期限切れ） |
+| `nsec-cover-mismatch` | 子 | 指定名を覆う NSEC の Next Domain Name を所有者名にして、指定名をカバーしない状態にする | 不在証明のカバー不成立 |
+| `nsec3-cover-mismatch` | 子 | 指定名を覆う NSEC3 の Next Hashed Owner Name を所有者ハッシュにして、指定名をカバーしない状態にする | 不在証明のカバー不成立 |
 
 加工対象となる `DS` は親ゾーンのものであり、加工対象となる `RRSIG` は子ゾーンのものです。同じ委任先について複数の失敗パターンを公開する場合は、毎回、元の正常な署名済みゾーンから個別に出力してください。
+
+`nsec-*-cover-mismatch` は、NSEC/NSEC3 の RDATA を変更するため、**未署名ゾーンに対して実行してから署名**してください。署名済みゾーンに適用すると NSEC/NSEC3 の `RRSIG` も無効になるため、カバー不成立ではなく署名検証失敗になります。
+
+これらのモードは、存在しない名前に対する NXDOMAIN 応答のカバー範囲を壊します。A レコードが存在する名前への A 問い合わせは肯定応答であり NSEC/NSEC3 を返さないため、カバー不成立を発生させられません。また、AAAA レコードだけが存在する名前への A 問い合わせは、同一名の NSEC/NSEC3 の型ビットマップによる NODATA 証明であり、カバー範囲ではありません。これらのケースで不在証明を壊すには、型ビットマップを変更する別の加工が必要です。
 
 ## 実行例
 
@@ -89,6 +95,21 @@ python corrupt_zone.py `
 ```powershell
 python corrupt_zone.py -i expire.dnskey.error.example.test.zone.signed -o expire.dnskey.error.example.test.zone.signed-out -d expire.dnskey.error.example.test. -m dnskey-rrsig-expired
 ```
+
+存在しない `missing.error.example.test.` を覆う NSEC のカバー範囲を壊してから署名する例です。
+
+```powershell
+python corrupt_zone.py `
+  --input error.example.test.zone `
+  --output error.example.test.nsec-cover.zone `
+  --origin error.example.test. `
+  --mode nsec-cover-mismatch `
+  --target-name missing.error.example.test.
+
+./dnssec_sign_zone.sh error.example.test.nsec-cover.zone /path/to/keys /path/to/zones
+```
+
+NSEC3 署名済みゾーンを生成する構成では、同じ対象名に `--mode nsec3-cover-mismatch` を指定します。
 
 ## NSD への反映
 
