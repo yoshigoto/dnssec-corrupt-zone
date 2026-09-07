@@ -1,6 +1,6 @@
 # dnssec-corrupt-zone
 
-署名済みの DNSSEC ゾーンファイルを検証用に加工する Python スクリプトです。親ゾーンの `DS` レコードまたは子ゾーンの `DNSKEY` に対する署名データ `RRSIG` を意図的に壊します。[DNSSEC委任状態検証ツール](https://www.on-link.jp/dnssec-validator/) で、実際に壊れた事例を確認することができます。
+DNSSEC ゾーンファイルを検証用に加工する Python スクリプトです。親ゾーンの `DS`、子ゾーンの `DNSKEY` と否定応答に使われる NSEC/NSEC3 を意図的に不整合にします。[DNSSEC委任状態検証ツール](https://www.on-link.jp/dnssec-validator/) で、実際に壊れた事例を確認することができます。
 
 このツールはゾーンへの署名や NSD の再読み込みを行いません。必要に応じて署名前、または署名済みのゾーンファイルを用意し、このツールで出力されたゾーンファイルを NSD で読み込ませてください。
 
@@ -27,7 +27,7 @@ uv pip install -r requirements.txt
 ## 使い方
 
 ```text
-python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode MODE [--target-name NAME] [--increment-serial]
+python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode MODE [--target-name NAME] [--target-type TYPE] [--increment-serial]
 ```
 
 | 引数 | 説明 |
@@ -37,6 +37,7 @@ python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode
 | `--origin`, `-d` | 入力ゾーンのオリジン (末尾の `.` は省略可能) |
 | `--mode`, `-m` | 後述する検証ケース |
 | `--target-name`, `-t` | 加工対象の名前 (`ds-*`、`nsec-*` モードでは必須) |
+| `--target-type` | 型ビットマップ不整合モードで追加する問い合わせ型 (既定: `A`) |
 | `--increment-serial`, `-s` | SOA レコードの Serial を 1 インクリメントする |
 
 出力先ディレクトリが存在しない場合は作成されます。対象レコードが見つからない場合、ゾーンを出力せずエラー終了します。
@@ -53,12 +54,17 @@ python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode
 | `dnskey-rrsig-expired` | 子 | ゾーン頂点の `DNSKEY` の電子署名データである `RRSIG` の有効期限を `2010-01-01T00:00:00Z` にする | DNSKEYリソースレコードの検証失敗（有効期限切れ） |
 | `nsec-cover-mismatch` | 子 | 指定名を覆う NSEC の Next Domain Name を所有者名にして、指定名をカバーしない状態にする | 不在証明のカバー不成立 |
 | `nsec3-cover-mismatch` | 子 | 指定名を覆う NSEC3 の Next Hashed Owner Name を所有者ハッシュにして、指定名をカバーしない状態にする | 不在証明のカバー不成立 |
+| `nsec3-optout-cover-mismatch` | 子 | 指定名を覆う Opt-Out フラグ付き NSEC3 だけを対象に、カバー範囲を壊す | Opt-Out 不在証明のカバー不成立 |
+| `nsec-type-bitmap-mismatch` | 子 | 指定名の NSEC 型ビットマップに問い合わせ型を追加する | NODATA 不在証明の不整合 |
+| `nsec3-type-bitmap-mismatch` | 子 | 指定名の NSEC3 型ビットマップに問い合わせ型を追加する | NODATA 不在証明の不整合 |
 
 加工対象となる `DS` は親ゾーンのものであり、加工対象となる `RRSIG` は子ゾーンのものです。同じ委任先について複数の失敗パターンを公開する場合は、毎回、元の正常な署名済みゾーンから個別に出力してください。
 
-`nsec-*-cover-mismatch` は、NSEC/NSEC3 の RDATA を変更するため、**未署名ゾーンに対して実行してから署名**してください。署名済みゾーンに適用すると NSEC/NSEC3 の `RRSIG` も無効になるため、カバー不成立ではなく署名検証失敗になります。
+`nsec-*` モードは NSEC/NSEC3 の RDATA を変更するため、**未署名ゾーンに対して実行してから署名**してください。署名済みゾーンに適用すると NSEC/NSEC3 の `RRSIG` も無効になるため、不在証明の不整合ではなく署名検証失敗になります。
 
-これらのモードは、存在しない名前に対する NXDOMAIN 応答のカバー範囲を壊します。A レコードが存在する名前への A 問い合わせは肯定応答であり NSEC/NSEC3 を返さないため、カバー不成立を発生させられません。また、AAAA レコードだけが存在する名前への A 問い合わせは、同一名の NSEC/NSEC3 の型ビットマップによる NODATA 証明であり、カバー範囲ではありません。これらのケースで不在証明を壊すには、型ビットマップを変更する別の加工が必要です。
+`*-cover-mismatch` は、存在しない名前に対する NXDOMAIN 応答のカバー範囲を壊します。AAAA レコードだけが存在する名前への A 問い合わせのような NODATA 応答には、`*-type-bitmap-mismatch` を使います。対象名のビットマップに A を追加すると、権威サーバーの A/NODATA 応答と不在証明が矛盾します。
+
+ワイルドカード応答の次に近い名前の不在証明も、実際に問い合わせる名前を `--target-name` に指定して `*-cover-mismatch` を使います。NSEC3 Opt-Out を使う委任ケースでは、`nsec3-optout-cover-mismatch` を指定してください。このモードは Opt-Out フラグを持つ NSEC3 が対象名を覆う場合だけ変更します。
 
 ## 実行例
 
@@ -110,6 +116,30 @@ python corrupt_zone.py `
 ```
 
 NSEC3 署名済みゾーンを生成する構成では、同じ対象名に `--mode nsec3-cover-mismatch` を指定します。
+
+Opt-Out NSEC3 のカバー範囲を壊す場合は、`--mode nsec3-optout-cover-mismatch` を指定します。対象名は、変更対象となる Opt-Out NSEC3 が実際に覆う名前にしてください。
+
+AAAA レコードだけを持つ `aaaa.success.ed448.dnssec-check.jp.` の A/NODATA 不在証明を壊すには、該当する未署名子ゾーンに対して次のように実行してから署名します。
+
+```powershell
+python corrupt_zone.py `
+  --input success.ed448.dnssec-check.jp.zone `
+  --output success.ed448.dnssec-check.jp.nsec3-bitmap.zone `
+  --origin success.ed448.dnssec-check.jp. `
+  --mode nsec3-type-bitmap-mismatch `
+  --target-name aaaa.success.ed448.dnssec-check.jp. `
+  --target-type A
+```
+
+通常の NSEC ゾーンでは `--mode nsec-type-bitmap-mismatch` を指定します。`--target-type` は省略時に `A` となるため、上の例では省略可能です。
+
+## テスト
+
+NSEC/NSEC3 のカバー範囲、NODATA 型ビットマップ、NSEC3 Opt-Out の加工は、次のコマンドで検証できます。
+
+```powershell
+python -m unittest -v test_corrupt_zone.py
+```
 
 ## NSD への反映
 

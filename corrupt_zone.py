@@ -8,10 +8,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 import dns.dnssec
+import dns.exception
 import dns.name
 import dns.rdata
 import dns.rdataclass
 import dns.rdatatype
+import dns.rdtypes.util
 import dns.zone
 
 IN = dns.rdataclass.IN
@@ -25,6 +27,9 @@ MODES = {
     "dnskey-rrsig-expired": "子ゾーン: DNSKEY を覆う RRSIG を期限切れにする",
     "nsec-cover-mismatch": "子ゾーン: 指定名を覆う NSEC のカバー範囲を壊す",
     "nsec3-cover-mismatch": "子ゾーン: 指定名を覆う NSEC3 のカバー範囲を壊す",
+    "nsec3-optout-cover-mismatch": "子ゾーン: Opt-Out NSEC3 のカバー範囲を壊す",
+    "nsec-type-bitmap-mismatch": "子ゾーン: 指定名の NSEC 型ビットマップを不整合にする",
+    "nsec3-type-bitmap-mismatch": "子ゾーン: 指定名の NSEC3 型ビットマップを不整合にする",
 }
 EXPIRED_AT = 1262304000  # 2010-01-01T00:00:00Z
 
@@ -41,6 +46,11 @@ def parse_args() -> argparse.Namespace:
         "-t",
         "--target-name",
         help="加工対象の名前。--mode の ds-*、nsec-* では必須",
+    )
+    parser.add_argument(
+        "--target-type",
+        default="A",
+        help="型ビットマップ不整合モードで追加する問い合わせ型 (既定: A)",
     )
     parser.add_argument(
         "-s",
@@ -159,6 +169,35 @@ def nsec3_hash_from_owner(owner: dns.name.Name) -> bytes:
     return base64.b32decode(normal_base32 + "=" * (-len(normal_base32) % 8))
 
 
+def bitmap_rdtypes(windows: tuple[tuple[int, bytes], ...]) -> list[dns.rdatatype.RdataType]:
+    rdtypes = []
+    for window, bitmap in windows:
+        for offset, byte in enumerate(bitmap):
+            for bit in range(8):
+                if byte & (0x80 >> bit):
+                    rdtypes.append(dns.rdatatype.RdataType.make(window * 256 + offset * 8 + bit))
+    return rdtypes
+
+
+def bitmap_contains(rdata: dns.rdata.Rdata, target_type: dns.rdatatype.RdataType) -> bool:
+    windows = getattr(rdata, "windows", None)
+    if not isinstance(windows, tuple):
+        raise TypeError("NSEC または NSEC3 レコードではありません")
+    return target_type in bitmap_rdtypes(windows)
+
+
+def add_type_to_bitmap(
+    rdata: dns.rdata.Rdata, target_type: dns.rdatatype.RdataType
+) -> dns.rdata.Rdata:
+    windows = getattr(rdata, "windows", None)
+    if not isinstance(windows, tuple):
+        raise TypeError("NSEC または NSEC3 レコードではありません")
+    windows = dns.rdtypes.util.Bitmap.from_rdtypes(
+        [*bitmap_rdtypes(windows), target_type]
+    ).windows
+    return rdata.replace(windows=windows)
+
+
 def modify_nsec_coverage(zone: dns.zone.Zone, target_name: str) -> int:
     if zone.origin is None:
         raise ValueError("ゾーンオリジンがありません")
@@ -180,7 +219,9 @@ def modify_nsec_coverage(zone: dns.zone.Zone, target_name: str) -> int:
     return 0
 
 
-def modify_nsec3_coverage(zone: dns.zone.Zone, target_name: str) -> int:
+def modify_nsec3_coverage(
+    zone: dns.zone.Zone, target_name: str, require_opt_out: bool = False
+) -> int:
     if zone.origin is None:
         raise ValueError("ゾーンオリジンがありません")
     target = make_absolute_name(target_name, zone.origin)
@@ -191,7 +232,10 @@ def modify_nsec3_coverage(zone: dns.zone.Zone, target_name: str) -> int:
                 continue
             original = list(rdataset)
             matching = [
-                name_is_covered(
+                (
+                    not require_opt_out or rdata.flags & 0x01
+                )
+                and name_is_covered(
                     absolute_owner,
                     rdata.next_name(zone.origin),
                     dns.name.from_text(
@@ -215,6 +259,47 @@ def modify_nsec3_coverage(zone: dns.zone.Zone, target_name: str) -> int:
     return 0
 
 
+def modify_nsec_type_bitmap(
+    zone: dns.zone.Zone, target_name: str, target_type: dns.rdatatype.RdataType
+) -> int:
+    if zone.origin is None:
+        raise ValueError("ゾーンオリジンがありません")
+    owner = make_absolute_name(target_name, zone.origin)
+    return replace_matching_rdatas(
+        zone,
+        owner,
+        dns.rdatatype.NSEC,
+        lambda rdata: not bitmap_contains(rdata, target_type),
+        lambda rdata: add_type_to_bitmap(rdata, target_type),
+    )
+
+
+def modify_nsec3_type_bitmap(
+    zone: dns.zone.Zone, target_name: str, target_type: dns.rdatatype.RdataType
+) -> int:
+    if zone.origin is None:
+        raise ValueError("ゾーンオリジンがありません")
+    target = make_absolute_name(target_name, zone.origin)
+    for owner, node in zone.nodes.items():
+        absolute_owner = owner.derelativize(zone.origin)
+        for rdataset in node.rdatasets:
+            if rdataset.rdclass != IN or rdataset.rdtype != dns.rdatatype.NSEC3:
+                continue
+            original = list(rdataset)
+            matching = [
+                absolute_owner.labels[0].decode("ascii").upper()
+                == dns.dnssec.nsec3_hash(target, rdata.salt, rdata.iterations, rdata.algorithm)
+                and not bitmap_contains(rdata, target_type)
+                for rdata in original
+            ]
+            if any(matching):
+                rdataset.clear()
+                for rdata, matches in zip(original, matching):
+                    rdataset.add(add_type_to_bitmap(rdata, target_type) if matches else rdata)
+                return sum(matching)
+    return 0
+
+
 def modify_parent_zone(zone: dns.zone.Zone, mode: str, target_name: str) -> int:
     if zone.origin is None:
         raise ValueError("ゾーンオリジンがありません")
@@ -233,7 +318,12 @@ def modify_parent_zone(zone: dns.zone.Zone, mode: str, target_name: str) -> int:
     )
 
 
-def modify_child_zone(zone: dns.zone.Zone, mode: str, target_name: str | None) -> int:
+def modify_child_zone(
+    zone: dns.zone.Zone,
+    mode: str,
+    target_name: str | None,
+    target_type: dns.rdatatype.RdataType,
+) -> int:
     if zone.origin is None:
         raise ValueError("ゾーンオリジンがありません")
     if mode == "nsec-cover-mismatch":
@@ -244,6 +334,18 @@ def modify_child_zone(zone: dns.zone.Zone, mode: str, target_name: str | None) -
         if target_name is None:
             raise ValueError("対象名がありません")
         return modify_nsec3_coverage(zone, target_name)
+    if mode == "nsec3-optout-cover-mismatch":
+        if target_name is None:
+            raise ValueError("対象名がありません")
+        return modify_nsec3_coverage(zone, target_name, require_opt_out=True)
+    if mode == "nsec-type-bitmap-mismatch":
+        if target_name is None:
+            raise ValueError("対象名がありません")
+        return modify_nsec_type_bitmap(zone, target_name, target_type)
+    if mode == "nsec3-type-bitmap-mismatch":
+        if target_name is None:
+            raise ValueError("対象名がありません")
+        return modify_nsec3_type_bitmap(zone, target_name, target_type)
     if mode == "dnskey-rrsig-corrupt":
         return replace_matching_rdatas(
             zone, zone.origin, dns.rdatatype.RRSIG,
@@ -286,6 +388,10 @@ def main() -> None:
     args = parse_args()
     origin = make_absolute_name(args.origin, dns.name.root)
     zone = dns.zone.from_file(str(args.input), origin=origin, relativize=True, check_origin=False)
+    try:
+        target_type = dns.rdatatype.from_text(args.target_type)
+    except dns.exception.DNSException as error:
+        raise SystemExit(f"不正な --target-type です: {args.target_type}") from error
 
     if args.mode == "success":
         changed = 0
@@ -296,7 +402,7 @@ def main() -> None:
     else:
         if args.mode.startswith("nsec") and not args.target_name:
             raise SystemExit("--mode の nsec-* では --target-name が必要です")
-        changed = modify_child_zone(zone, args.mode, args.target_name)
+        changed = modify_child_zone(zone, args.mode, args.target_name, target_type)
 
     if args.mode != "success" and not changed:
         raise SystemExit(f"対象レコードが見つかりませんでした: {MODES[args.mode]}")
