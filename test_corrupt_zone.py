@@ -13,6 +13,120 @@ ORIGIN = dns.name.from_text("example.")
 
 
 class CorruptZoneTests(unittest.TestCase):
+    def test_ds_keytag_mismatch(self) -> None:
+        zone = dns.zone.from_text(
+            "child 300 IN DS 1234 8 2 "
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            origin=ORIGIN,
+            relativize=True,
+            check_origin=False,
+        )
+
+        self.assertEqual(
+            corrupt_zone.modify_parent_zone(
+                zone, "ds-keytag-mismatch", "child.example."
+            ),
+            1,
+        )
+
+        ds = self._rdata_at(zone, "child", dns.rdatatype.DS)
+        self.assertEqual(getattr(ds, "key_tag"), 1235)
+
+    def test_ds_hash_mismatch(self) -> None:
+        zone = dns.zone.from_text(
+            "child 300 IN DS 1234 8 2 "
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            origin=ORIGIN,
+            relativize=True,
+            check_origin=False,
+        )
+        original_digest = getattr(self._rdata_at(zone, "child", dns.rdatatype.DS), "digest")
+
+        self.assertEqual(
+            corrupt_zone.modify_parent_zone(zone, "ds-hash-mismatch", "child.example."),
+            1,
+        )
+
+        ds = self._rdata_at(zone, "child", dns.rdatatype.DS)
+        self.assertEqual(getattr(ds, "digest"), corrupt_zone.change_last_byte(original_digest))
+
+    def test_ds_rrsig_corrupt(self) -> None:
+        zone = dns.zone.from_text(
+            "child 300 IN RRSIG DS 8 2 300 20300101000000 20200101000000 1234 example. AQID\n"
+            "child 300 IN RRSIG A 8 2 300 20300101000000 20200101000000 1234 example. BAUG",
+            origin=ORIGIN,
+            relativize=True,
+            check_origin=False,
+        )
+        original_signature = getattr(
+            self._rdata_at(zone, "child", dns.rdatatype.RRSIG), "signature"
+        )
+
+        self.assertEqual(
+            corrupt_zone.modify_parent_zone(zone, "ds-rrsig-corrupt", "child.example."),
+            1,
+        )
+
+        rrsig = self._rdata_at(zone, "child", dns.rdatatype.RRSIG)
+        self.assertEqual(
+            getattr(rrsig, "signature"), corrupt_zone.change_last_byte(original_signature)
+        )
+
+    def test_dnskey_rrsig_corrupt(self) -> None:
+        zone = dns.zone.from_text(
+            "@ 300 IN RRSIG DNSKEY 8 0 300 20300101000000 20200101000000 1234 example. AQID\n"
+            "@ 300 IN RRSIG A 8 0 300 20300101000000 20200101000000 1234 example. BAUG",
+            origin=ORIGIN,
+            relativize=True,
+            check_origin=False,
+        )
+        original_signature = getattr(
+            self._rdata_at(zone, "@", dns.rdatatype.RRSIG), "signature"
+        )
+
+        self.assertEqual(
+            corrupt_zone.modify_child_zone(
+                zone, "dnskey-rrsig-corrupt", None, dns.rdatatype.A
+            ),
+            1,
+        )
+
+        rrsig = self._rdata_at(zone, "@", dns.rdatatype.RRSIG)
+        self.assertEqual(
+            getattr(rrsig, "signature"), corrupt_zone.change_last_byte(original_signature)
+        )
+
+    def test_dnskey_rrsig_expired(self) -> None:
+        zone = dns.zone.from_text(
+            "@ 300 IN RRSIG DNSKEY 8 0 300 20300101000000 20200101000000 1234 example. AQID",
+            origin=ORIGIN,
+            relativize=True,
+            check_origin=False,
+        )
+
+        self.assertEqual(
+            corrupt_zone.modify_child_zone(
+                zone, "dnskey-rrsig-expired", None, dns.rdatatype.A
+            ),
+            1,
+        )
+
+        rrsig = self._rdata_at(zone, "@", dns.rdatatype.RRSIG)
+        self.assertEqual(getattr(rrsig, "expiration"), corrupt_zone.EXPIRED_AT)
+
+    def test_increment_zone_soa_serial(self) -> None:
+        zone = dns.zone.from_text(
+            "@ 300 IN SOA ns.example. hostmaster.example. 4294967295 3600 600 86400 300",
+            origin=ORIGIN,
+            relativize=True,
+            check_origin=False,
+        )
+
+        self.assertEqual(corrupt_zone.increment_zone_soa(zone), 1)
+
+        soa = self._rdata_at(zone, "@", dns.rdatatype.SOA)
+        self.assertEqual(getattr(soa, "serial"), 0)
+
     def test_nsec_coverage_mismatch(self) -> None:
         zone = dns.zone.from_text(
             "a 300 IN NSEC z.example. A\nz 300 IN NSEC a.example. A",
