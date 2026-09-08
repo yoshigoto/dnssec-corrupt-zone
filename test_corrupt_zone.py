@@ -1,4 +1,5 @@
 import unittest
+import base64
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -7,7 +8,6 @@ import dns.name
 import dns.rdata
 import dns.rdatatype
 import dns.zone
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 import corrupt_zone
@@ -270,14 +270,8 @@ class CorruptZoneTests(unittest.TestCase):
             self._rdata_at(zone, "a", dns.rdatatype.RRSIG), "signature"
         )
 
-        with NamedTemporaryFile(suffix=".pem", delete=False) as key_file:
-            key_file.write(
-                private_key.private_bytes(
-                    serialization.Encoding.PEM,
-                    serialization.PrivateFormat.PKCS8,
-                    serialization.NoEncryption(),
-                )
-            )
+        with NamedTemporaryFile(suffix=".private", delete=False) as key_file:
+            key_file.write(self._ldns_private_file(private_key).encode("ascii"))
             key_path = Path(key_file.name)
         try:
             self.assertEqual(
@@ -323,6 +317,30 @@ class CorruptZoneTests(unittest.TestCase):
             origin=ORIGIN,
             relativize=True,
             check_origin=False,
+        )
+
+    @staticmethod
+    def _ldns_private_file(private_key: rsa.RSAPrivateKey) -> str:
+        numbers = private_key.private_numbers()
+
+        def encode(value: int) -> str:
+            raw = value.to_bytes((value.bit_length() + 7) // 8, "big")
+            return base64.b64encode(raw).decode("ascii").rstrip("=")
+
+        return "\n".join(
+            [
+                "Private-key-format: v1.3",
+                "Algorithm: 8 (RSASHA256)",
+                f"Modulus: {encode(numbers.public_numbers.n)}",
+                f"PublicExponent: {encode(numbers.public_numbers.e)}",
+                f"PrivateExponent: {encode(numbers.d)}",
+                f"Prime1: {encode(numbers.p)}",
+                f"Prime2: {encode(numbers.q)}",
+                f"Exponent1: {encode(numbers.dmp1)}",
+                f"Exponent2: {encode(numbers.dmq1)}",
+                f"Coefficient: {encode(numbers.iqmp)}",
+                "",
+            ]
         )
 
     @staticmethod

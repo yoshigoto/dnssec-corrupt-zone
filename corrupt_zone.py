@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import dns.dnssec
 import dns.exception
@@ -17,9 +17,10 @@ import dns.rdataset
 import dns.rdatatype
 import dns.rdtypes.util
 import dns.zone
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 IN = dns.rdataclass.IN
+ZSK_ALGORITHM = 8
 
 MODES = {
     "success": "成功パターン: 署名済みゾーンをそのまま出力",
@@ -58,7 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--zsk-private-key",
         type=Path,
-        help="nsec-* モードで RRSIG を再生成する ZSK 秘密鍵 (PEM形式)",
+        help="nsec-* モードで RRSIG を再生成する ZSK の .private ファイル",
     )
     parser.add_argument(
         "-s",
@@ -193,13 +194,44 @@ def bitmap_contains(rdata: dns.rdata.Rdata, target_type: dns.rdatatype.RdataType
     return target_type in bitmap_rdtypes(windows)
 
 
-def load_private_key(path: Path) -> Any:
+def decode_private_value(value: str) -> int:
     try:
-        return serialization.load_pem_private_key(path.read_bytes(), password=None)
-    except (ValueError, TypeError) as error:
-        raise ValueError(
-            f"ZSK 秘密鍵を PEM 形式で読み込めませんでした: {path}"
-        ) from error
+        value += "=" * (-len(value) % 4)
+        return int.from_bytes(base64.b64decode(value, validate=True), "big")
+    except (ValueError, binascii.Error) as error:
+        raise ValueError(".private ファイルの Base64 値を読み込めませんでした") from error
+
+
+def load_private_key(path: Path) -> rsa.RSAPrivateKey:
+    values: dict[str, str] = {}
+    try:
+        for line in path.read_text(encoding="ascii").splitlines():
+            if ":" not in line:
+                continue
+            name, value = line.split(":", 1)
+            values[name.strip()] = value.strip()
+        algorithm = int(values["Algorithm"].split("(", 1)[0].strip())
+        if algorithm != ZSK_ALGORITHM:
+            raise ValueError(
+                f"対応する ZSK アルゴリズムは RSA/SHA-256 (8) だけです: {algorithm}"
+            )
+        numbers = rsa.RSAPrivateNumbers(
+            p=decode_private_value(values["Prime1"]),
+            q=decode_private_value(values["Prime2"]),
+            d=decode_private_value(values["PrivateExponent"]),
+            dmp1=decode_private_value(values["Exponent1"]),
+            dmq1=decode_private_value(values["Exponent2"]),
+            iqmp=decode_private_value(values["Coefficient"]),
+            public_numbers=rsa.RSAPublicNumbers(
+                e=decode_private_value(values["PublicExponent"]),
+                n=decode_private_value(values["Modulus"]),
+            ),
+        )
+        return numbers.private_key()
+    except (KeyError, OSError, ValueError) as error:
+        if isinstance(error, ValueError) and str(error).startswith("対応する"):
+            raise
+        raise ValueError(f"RSA 形式の .private ファイルを読み込めませんでした: {path}") from error
 
 
 def find_zsk_dnskey(
@@ -214,7 +246,7 @@ def find_zsk_dnskey(
         if rdataset.rdclass != IN or rdataset.rdtype != dns.rdatatype.DNSKEY:
             continue
         for dnskey in rdataset:
-            if dnskey.flags & 0x0100 and dnskey.algorithm == algorithm:
+            if dnskey.flags & 0x0100 and dnskey.algorithm == algorithm == ZSK_ALGORITHM:
                 if dns.dnssec.key_id(dnskey) == key_tag:
                     return dnskey
     raise ValueError(
