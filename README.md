@@ -36,7 +36,7 @@ python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode
 | `--output`, `-o` | NSD に読み込ませる加工後のゾーンファイル |
 | `--origin`, `-d` | 入力ゾーンのオリジン (末尾の `.` は省略可能) |
 | `--mode`, `-m` | 後述する検証ケース |
-| `--target-name`, `-t` | 加工対象の名前 (`ds-*`、`nsec-*` モードでは必須) |
+| `--target-name`, `-t` | 加工対象の名前 (`ds-*`、`nsec-*` モードでは必須)。`www` のような相対名は `--origin` に対して解決され、末尾に `.` がある名前は FQDN として扱われます |
 | `--target-type` | 型ビットマップ不整合モードで追加する問い合わせ型 (既定: `A`) |
 | `--increment-serial`, `-s` | SOA レコードの Serial を 1 インクリメントする |
 

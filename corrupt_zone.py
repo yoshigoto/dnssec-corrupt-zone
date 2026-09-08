@@ -62,8 +62,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def make_absolute_name(text: str, origin: dns.name.Name) -> dns.name.Name:
-    name = dns.name.from_text(text)
-    return name if name.is_absolute() else name.derelativize(origin)
+    return dns.name.from_text(text, origin)
 
 
 def change_last_byte(value: bytes) -> bytes:

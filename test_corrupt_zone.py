@@ -13,6 +13,12 @@ ORIGIN = dns.name.from_text("example.")
 
 
 class CorruptZoneTests(unittest.TestCase):
+    def test_relative_target_name_uses_zone_origin(self) -> None:
+        self.assertEqual(
+            corrupt_zone.make_absolute_name("www", ORIGIN),
+            dns.name.from_text("www.example."),
+        )
+
     def test_ds_keytag_mismatch(self) -> None:
         zone = dns.zone.from_text(
             "child 300 IN DS 1234 8 2 "
