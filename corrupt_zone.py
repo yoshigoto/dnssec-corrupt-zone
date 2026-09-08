@@ -275,14 +275,13 @@ def resign_denial_rrsets(
         )
         if denial_rdataset is None:
             continue
-        rrsig_rdataset = next(
-            (
-                rdataset
-                for rdataset in node.rdatasets
-                if rdataset.rdclass == IN and rdataset.rdtype == dns.rdatatype.RRSIG
-            ),
-            None,
-        )
+        rrsig_rdataset = None
+        for candidate in node.rdatasets:
+            if candidate.rdclass != IN or candidate.rdtype != dns.rdatatype.RRSIG:
+                continue
+            if any(rrsig_covers(rrsig, rdtype) for rrsig in candidate):
+                rrsig_rdataset = candidate
+                break
         if rrsig_rdataset is None:
             continue
         template = next(
