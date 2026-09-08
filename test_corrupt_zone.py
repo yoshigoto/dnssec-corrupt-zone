@@ -1,10 +1,14 @@
 import unittest
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 import dns.dnssec
 import dns.name
 import dns.rdata
 import dns.rdatatype
 import dns.zone
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 import corrupt_zone
 
@@ -246,6 +250,69 @@ class CorruptZoneTests(unittest.TestCase):
                 for rdataset in zone.nodes[dns.name.empty].rdatasets
                 if rdataset.rdtype == dns.rdatatype.NSEC3PARAM
             )
+        )
+
+    def test_resign_changed_nsec_rrset(self) -> None:
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        dnskey = dns.dnssec.make_dnskey(private_key.public_key(), 8, flags=256)
+        key_tag = dns.dnssec.key_id(dnskey)
+        zone = dns.zone.from_text(
+            f"@ 300 IN DNSKEY {dnskey.to_text()}\n"
+            "a 300 IN NSEC z.example. A\n"
+            "z 300 IN NSEC a.example. A\n"
+            f"a 300 IN RRSIG NSEC 8 2 300 20300101000000 20200101000000 {key_tag} example. AQID",
+            origin=ORIGIN,
+            relativize=True,
+            check_origin=False,
+        )
+        self.assertEqual(corrupt_zone.modify_nsec_coverage(zone, "m.example."), 1)
+        original_signature = getattr(
+            self._rdata_at(zone, "a", dns.rdatatype.RRSIG), "signature"
+        )
+
+        with NamedTemporaryFile(suffix=".pem", delete=False) as key_file:
+            key_file.write(
+                private_key.private_bytes(
+                    serialization.Encoding.PEM,
+                    serialization.PrivateFormat.PKCS8,
+                    serialization.NoEncryption(),
+                )
+            )
+            key_path = Path(key_file.name)
+        try:
+            self.assertEqual(
+                corrupt_zone.resign_denial_rrsets(
+                    zone, dns.rdatatype.NSEC, key_path, {dns.name.from_text("a", None)}
+                ),
+                1,
+            )
+        finally:
+            key_path.unlink()
+
+        rrsig = self._rdata_at(zone, "a", dns.rdatatype.RRSIG)
+        self.assertNotEqual(getattr(rrsig, "signature"), original_signature)
+        node_owner = dns.name.from_text("a", None)
+        owner = dns.name.from_text("a.example.")
+        nsec_rdataset = next(
+            rdataset
+            for rdataset in zone.nodes[node_owner].rdatasets
+            if rdataset.rdtype == dns.rdatatype.NSEC
+        )
+        rrsig_rdataset = next(
+            rdataset
+            for rdataset in zone.nodes[node_owner].rdatasets
+            if rdataset.rdtype == dns.rdatatype.RRSIG
+        )
+        dnskey_rdataset = next(
+            rdataset
+            for rdataset in zone.nodes[dns.name.empty].rdatasets
+            if rdataset.rdtype == dns.rdatatype.DNSKEY
+        )
+        dns.dnssec.validate(
+            (owner, nsec_rdataset),
+            (owner, rrsig_rdataset),
+            {ORIGIN: dnskey_rdataset},
+            origin=ORIGIN,
         )
 
     @staticmethod

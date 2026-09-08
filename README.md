@@ -2,7 +2,7 @@
 
 DNSSEC ゾーンファイルを検証用に加工する Python スクリプトです。親ゾーンの `DS`、子ゾーンの `DNSKEY` と否定応答に使われる NSEC/NSEC3 を意図的に不整合にします。[DNSSEC委任状態検証ツール](https://www.on-link.jp/dnssec-validator/) で、実際に壊れた事例を確認することができます。
 
-このツールはゾーンへの署名や NSD の再読み込みを行いません。必要に応じて署名前、または署名済みのゾーンファイルを用意し、このツールで出力されたゾーンファイルを NSD で読み込ませてください。
+このツールは通常、ゾーン全体の署名や NSD の再読み込みを行いません。`nsec-*` モードだけは、指定された ZSK で変更対象 NSEC/NSEC3 RRset の RRSIG を再生成します。必要に応じて署名前、または署名済みのゾーンファイルを用意し、このツールで出力されたゾーンファイルを NSD で読み込ませてください。
 
 なお、本ツールで作成したドメイン名のリストを、[DNSSEC信頼の連鎖確認ページ](https://www.dnssec-check.jp/) で公開しています。
 
@@ -10,6 +10,7 @@ DNSSEC ゾーンファイルを検証用に加工する Python スクリプト�
 
 - Python 3.10 以降
 - `dnspython` 2.6 以降、3 未満
+- `cryptography` 42 以降
 - 親ゾーン・子ゾーンファイル (目的によって署名済みのもの、もしくは未署名のもの)
 
 依存するモジュールをインストールします。
@@ -38,6 +39,7 @@ python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode
 | `--mode`, `-m` | 後述する検証ケース |
 | `--target-name`, `-t` | 加工対象の名前 (`ds-*`、`nsec-*` モードでは必須)。`www` のような相対名は `--origin` に対して解決され、末尾に `.` がある名前は FQDN として扱われます |
 | `--target-type` | 型ビットマップ不整合モードで追加する問い合わせ型 (既定: `A`) |
+| `--zsk-private-key` | `nsec-*` モードで変更した NSEC/NSEC3 RRset を再署名する ZSK 秘密鍵 (PEM形式) |
 | `--increment-serial`, `-s` | SOA レコードの Serial を 1 インクリメントする |
 
 出力先ディレクトリが存在しない場合は作成されます。対象レコードが見つからない場合、ゾーンを出力せずエラー終了します。
@@ -60,7 +62,7 @@ python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode
 
 加工対象となる `DS` は親ゾーンのものであり、加工対象となる `RRSIG` は子ゾーンのものです。同じ委任先について複数の失敗パターンを公開する場合は、毎回、元の正常な署名済みゾーンから個別に出力してください。
 
-`nsec-*` モードは、入力ゾーンに NSEC/NSEC3 が存在しない場合でも、ゾーン内の名前から NSEC/NSEC3 と必要な NSEC3PARAM を生成してから RDATA を変更します。そのため、**未署名ゾーンに対して実行し、出力を署名**してください。署名済みゾーンに適用すると NSEC/NSEC3 の `RRSIG` も無効になるため、不在証明の不整合ではなく署名検証失敗になります。署名ツールが入力済みの NSEC/NSEC3 を再生成する設定の場合、破損内容が上書きされるため、生成済みレコードを保持する設定を使用してください。
+`nsec-*` モードは、**NSEC/NSEC3 とその RRSIG を含む署名済みゾーン**に対して実行します。NSEC/NSEC3 の RDATA を変更した後、`--zsk-private-key` で指定した ZSK を使って変更対象 RRset の RRSIG だけを再生成します。秘密鍵は PEM 形式で用意してください。未署名ゾーンや NSEC/NSEC3 がないゾーンでは対象レコードを変更できません。
 
 `*-cover-mismatch` は、存在しない名前に対する NXDOMAIN 応答のカバー範囲を壊します。AAAA レコードだけが存在する名前への A 問い合わせのような NODATA 応答には、`*-type-bitmap-mismatch` を使います。対象名のビットマップに A を追加すると、権威サーバーの A/NODATA 応答と不在証明が矛盾します。
 
@@ -106,29 +108,29 @@ python corrupt_zone.py -i expire.dnskey.error.example.test.zone.signed -o expire
 
 ```powershell
 python corrupt_zone.py `
-  --input error.example.test.zone `
-  --output error.example.test.nsec-cover.zone `
+  --input error.example.test.zone.signed `
+  --output error.example.test.nsec-cover.zone.signed `
   --origin error.example.test. `
   --mode nsec-cover-mismatch `
-  --target-name missing.error.example.test.
-
-./dnssec_sign_zone.sh error.example.test.nsec-cover.zone /path/to/keys /path/to/zones
+  --target-name missing.error.example.test. `
+  --zsk-private-key /path/to/zsk.private.pem
 ```
 
-NSEC3 署名済みゾーンを生成する構成では、同じ対象名に `--mode nsec3-cover-mismatch` を指定します。
+入力の未署名ゾーンから `dnssec_sign_zone.sh` で正常な署名済みゾーンを先に作成し、その出力を `--input` に指定してください。NSEC3 署名済みゾーンを対象にする場合は、同じ対象名に `--mode nsec3-cover-mismatch` を指定します。
 
 Opt-Out NSEC3 のカバー範囲を壊す場合は、`--mode nsec3-optout-cover-mismatch` を指定します。対象名は、変更対象となる Opt-Out NSEC3 が実際に覆う名前にしてください。
 
-AAAA レコードだけを持つ `optout-cover-mismatch.nsec3.error.example.test.` の A/NODATA 不在証明を壊すには、該当する未署名子ゾーンに対して次のように実行してから署名します。NSEC3PARAM が入力にない場合は、SHA-1、反復回数 0、ソルトなしの NSEC3PARAM を追加します。
+AAAA レコードだけを持つ `optout-cover-mismatch.nsec3.error.example.test.` の A/NODATA 不在証明を壊すには、正常に署名済みの子ゾーンに対して次のように実行します。
 
 ```powershell
 python corrupt_zone.py `
-  --input optout-cover-mismatch.nsec3.error.example.test.zone `
-  --output optout-cover-mismatch.nsec3.error.example.test.nsec3-bitmap.zone `
+  --input optout-cover-mismatch.nsec3.error.example.test.zone.signed `
+  --output optout-cover-mismatch.nsec3.error.example.test.nsec3-bitmap.zone.signed `
   --origin nsec3.error.example.test. `
   --mode nsec3-type-bitmap-mismatch `
   --target-name optout-cover-mismatch.nsec3.error.example.test. `
-  --target-type A
+  --target-type A `
+  --zsk-private-key /path/to/zsk.private.pem
 ```
 
 通常の NSEC ゾーンでは `--mode nsec-type-bitmap-mismatch` を指定します。`--target-type` は省略時に `A` となるため、上の例では省略可能です。
@@ -156,7 +158,7 @@ zone:
 ## 注意事項
 
 - 出力ゾーンは意図的に DNSSEC 検証に失敗します。通常利用している本番ゾーンには使用しないでください。
-- このスクリプトは DNSSEC の署名を再計算しません。加工後の `DS` または `RRSIG` の整合性が壊れることがこのスクリプトの目的です。
+- `nsec-*` モードでは、変更した NSEC/NSEC3 RRset の RRSIG だけを ZSK で再生成します。それ以外の署名は再計算しません。
 - 署名アルゴリズムに依存しない加工のため、RSASHA256、ECDSAP256SHA256、ED25519、ED448 の各ケースに利用できます。
 
 ## ゾーンファイルへの署名について

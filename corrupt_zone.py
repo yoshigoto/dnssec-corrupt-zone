@@ -6,6 +6,7 @@ import argparse
 import base64
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import dns.dnssec
 import dns.exception
@@ -16,6 +17,7 @@ import dns.rdataset
 import dns.rdatatype
 import dns.rdtypes.util
 import dns.zone
+from cryptography.hazmat.primitives import serialization
 
 IN = dns.rdataclass.IN
 
@@ -52,6 +54,11 @@ def parse_args() -> argparse.Namespace:
         "--target-type",
         default="A",
         help="型ビットマップ不整合モードで追加する問い合わせ型 (既定: A)",
+    )
+    parser.add_argument(
+        "--zsk-private-key",
+        type=Path,
+        help="nsec-* モードで RRSIG を再生成する ZSK 秘密鍵 (PEM形式)",
     )
     parser.add_argument(
         "-s",
@@ -184,6 +191,94 @@ def bitmap_contains(rdata: dns.rdata.Rdata, target_type: dns.rdatatype.RdataType
     if not isinstance(windows, tuple):
         raise TypeError("NSEC または NSEC3 レコードではありません")
     return target_type in bitmap_rdtypes(windows)
+
+
+def load_private_key(path: Path) -> Any:
+    try:
+        return serialization.load_pem_private_key(path.read_bytes(), password=None)
+    except (ValueError, TypeError) as error:
+        raise ValueError(
+            f"ZSK 秘密鍵を PEM 形式で読み込めませんでした: {path}"
+        ) from error
+
+
+def find_zsk_dnskey(
+    zone: dns.zone.Zone, algorithm: int, key_tag: int
+) -> dns.rdata.Rdata:
+    if zone.origin is None:
+        raise ValueError("ゾーンオリジンがありません")
+    node = zone.get_node(zone.origin.relativize(zone.origin))
+    if node is None:
+        raise ValueError("ゾーン頂点の DNSKEY が見つかりません")
+    for rdataset in node.rdatasets:
+        if rdataset.rdclass != IN or rdataset.rdtype != dns.rdatatype.DNSKEY:
+            continue
+        for dnskey in rdataset:
+            if dnskey.flags & 0x0100 and dnskey.algorithm == algorithm:
+                if dns.dnssec.key_id(dnskey) == key_tag:
+                    return dnskey
+    raise ValueError(
+        f"対応する ZSK DNSKEY が見つかりません: algorithm={algorithm}, key_tag={key_tag}"
+    )
+
+
+def resign_denial_rrsets(
+    zone: dns.zone.Zone,
+    rdtype: dns.rdatatype.RdataType,
+    key_path: Path,
+    owners: set[dns.name.Name],
+) -> int:
+    private_key = load_private_key(key_path)
+    changed = 0
+    for owner, node in zone.nodes.items():
+        if owner not in owners:
+            continue
+        denial_rdataset = next(
+            (
+                rdataset
+                for rdataset in node.rdatasets
+                if rdataset.rdclass == IN and rdataset.rdtype == rdtype
+            ),
+            None,
+        )
+        if denial_rdataset is None:
+            continue
+        rrsig_rdataset = next(
+            (
+                rdataset
+                for rdataset in node.rdatasets
+                if rdataset.rdclass == IN and rdataset.rdtype == dns.rdatatype.RRSIG
+            ),
+            None,
+        )
+        if rrsig_rdataset is None:
+            continue
+        template = next(
+            (rrsig for rrsig in rrsig_rdataset if rrsig_covers(rrsig, rdtype)),
+            None,
+        )
+        if template is None:
+            continue
+        dnskey = find_zsk_dnskey(zone, template.algorithm, template.key_tag)
+        absolute_owner = owner.derelativize(zone.origin)  # pyright: ignore
+        signature = dns.dnssec.sign(
+            (absolute_owner, denial_rdataset),
+            private_key,
+            template.signer.derelativize(zone.origin),  # pyright: ignore
+            dnskey,
+            inception=template.inception,
+            expiration=template.expiration,
+            origin=zone.origin,
+        )
+        original = list(rrsig_rdataset)
+        rrsig_rdataset.clear()
+        for rrsig in original:
+            if rrsig_covers(rrsig, rdtype) and rrsig.key_tag == template.key_tag:
+                rrsig_rdataset.add(signature)
+            else:
+                rrsig_rdataset.add(rrsig)
+        changed += 1
+    return changed
 
 
 def zone_names(zone: dns.zone.Zone) -> list[dns.name.Name]:
@@ -502,6 +597,26 @@ def save_zone(
             f.write("\n")
 
 
+def denial_rrset_snapshot(
+    zone: dns.zone.Zone, rdtype: dns.rdatatype.RdataType
+) -> dict[dns.name.Name, tuple[str, ...]]:
+    return {
+        owner: tuple(
+            sorted(
+                rdata.to_text(origin=zone.origin)
+                for rdataset in node.rdatasets
+                if rdataset.rdclass == IN and rdataset.rdtype == rdtype
+                for rdata in rdataset
+            )
+        )
+        for owner, node in zone.nodes.items()
+        if any(
+            rdataset.rdclass == IN and rdataset.rdtype == rdtype
+            for rdataset in node.rdatasets
+        )
+    }
+
+
 def main() -> None:
     args = parse_args()
     origin = make_absolute_name(args.origin, dns.name.root)
@@ -520,9 +635,30 @@ def main() -> None:
     else:
         if args.mode.startswith("nsec") and not args.target_name:
             raise SystemExit("--mode の nsec-* では --target-name が必要です")
-        if args.mode.startswith("nsec"):
-            ensure_denial_records(zone, args.mode)
+        denial_type = (
+            dns.rdatatype.NSEC3 if args.mode.startswith("nsec3-") else dns.rdatatype.NSEC
+        )
+        before_denial = (
+            denial_rrset_snapshot(zone, denial_type) if args.mode.startswith("nsec") else {}
+        )
         changed = modify_child_zone(zone, args.mode, args.target_name, target_type)
+        if args.mode.startswith("nsec") and changed:
+            if args.zsk_private_key is None:
+                raise SystemExit("nsec-* モードでは --zsk-private-key が必要です")
+            after_denial = denial_rrset_snapshot(zone, denial_type)
+            changed_owners = {
+                owner
+                for owner, records in after_denial.items()
+                if records != before_denial.get(owner)
+            }
+            try:
+                resigned = resign_denial_rrsets(
+                    zone, denial_type, args.zsk_private_key, changed_owners
+                )
+            except (OSError, ValueError, dns.exception.DNSException) as error:
+                raise SystemExit(str(error)) from error
+            if not resigned:
+                raise SystemExit("変更対象 RRset の RRSIG が見つかりませんでした")
 
     if args.mode != "success" and not changed:
         raise SystemExit(f"対象レコードが見つかりませんでした: {MODES[args.mode]}")
