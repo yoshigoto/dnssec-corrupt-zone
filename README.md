@@ -119,15 +119,15 @@ NSEC3 署名済みゾーンを生成する構成では、同じ対象名に `--m
 
 Opt-Out NSEC3 のカバー範囲を壊す場合は、`--mode nsec3-optout-cover-mismatch` を指定します。対象名は、変更対象となる Opt-Out NSEC3 が実際に覆う名前にしてください。
 
-AAAA レコードだけを持つ `aaaa.success.ed448.dnssec-check.jp.` の A/NODATA 不在証明を壊すには、該当する未署名子ゾーンに対して次のように実行してから署名します。
+AAAA レコードだけを持つ `optout-cover-mismatch.nsec3.error.example.test.` の A/NODATA 不在証明を壊すには、該当する未署名子ゾーンに対して次のように実行してから署名します。
 
 ```powershell
 python corrupt_zone.py `
-  --input success.ed448.dnssec-check.jp.zone `
-  --output success.ed448.dnssec-check.jp.nsec3-bitmap.zone `
-  --origin success.ed448.dnssec-check.jp. `
+  --input optout-cover-mismatch.nsec3.error.example.test.zone `
+  --output optout-cover-mismatch.nsec3.error.example.test.nsec3-bitmap.zone `
+  --origin nsec3.error.example.test. `
   --mode nsec3-type-bitmap-mismatch `
-  --target-name aaaa.success.ed448.dnssec-check.jp. `
+  --target-name optout-cover-mismatch.nsec3.error.example.test. `
   --target-type A
 ```
 
