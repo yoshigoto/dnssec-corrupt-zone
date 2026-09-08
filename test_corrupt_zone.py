@@ -205,6 +205,49 @@ class CorruptZoneTests(unittest.TestCase):
         nsec3 = self._rdata_at(zone, hashed_name, dns.rdatatype.NSEC3)
         self.assertTrue(corrupt_zone.bitmap_contains(nsec3, dns.rdatatype.A))
 
+    def test_generate_nsec_records_for_unsigned_zone(self) -> None:
+        zone = dns.zone.from_text(
+            "@ 300 IN SOA ns.example. hostmaster.example. 1 3600 600 86400 300\n"
+            "@ 300 IN NS ns.example.\n"
+            "www 300 IN AAAA 2001:db8::1",
+            origin=ORIGIN,
+            relativize=True,
+            check_origin=False,
+        )
+
+        self.assertEqual(corrupt_zone.ensure_denial_records(zone, "nsec-cover-mismatch"), 2)
+        self.assertEqual(
+            corrupt_zone.modify_nsec_coverage(zone, "missing.example."), 1
+        )
+        self.assertEqual(
+            len([node for node in zone.nodes.values() if any(
+                rdataset.rdtype == dns.rdatatype.NSEC for rdataset in node.rdatasets
+            )]),
+            2,
+        )
+
+    def test_generate_nsec3_records_for_unsigned_zone(self) -> None:
+        zone = dns.zone.from_text(
+            "@ 300 IN SOA ns.example. hostmaster.example. 1 3600 600 86400 300\n"
+            "@ 300 IN NS ns.example.\n"
+            "www 300 IN AAAA 2001:db8::1",
+            origin=ORIGIN,
+            relativize=True,
+            check_origin=False,
+        )
+
+        self.assertEqual(corrupt_zone.ensure_denial_records(zone, "nsec3-cover-mismatch"), 2)
+        self.assertEqual(
+            corrupt_zone.modify_nsec3_coverage(zone, "missing.example."), 1
+        )
+        self.assertIsNotNone(
+            next(
+                rdataset
+                for rdataset in zone.nodes[dns.name.empty].rdatasets
+                if rdataset.rdtype == dns.rdatatype.NSEC3PARAM
+            )
+        )
+
     @staticmethod
     def _nsec3_coverage_zone(flags: int) -> dns.zone.Zone:
         return dns.zone.from_text(

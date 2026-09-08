@@ -1,4 +1,4 @@
-"""署名済み DNSSEC ゾーンを検証用に意図的に破損させる。"""
+"""DNSSEC ゾーンを検証用に意図的に破損させる。"""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import dns.exception
 import dns.name
 import dns.rdata
 import dns.rdataclass
+import dns.rdataset
 import dns.rdatatype
 import dns.rdtypes.util
 import dns.zone
@@ -36,9 +37,9 @@ EXPIRED_AT = 1262304000  # 2010-01-01T00:00:00Z
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="署名済み DNSSEC ゾーンを dnssecvalidator 検証用に加工する"
+        description="DNSSEC ゾーンを dnssecvalidator 検証用に加工する"
     )
-    parser.add_argument("-i", "--input", type=Path, required=True, help="入力する署名済みゾーン")
+    parser.add_argument("-i", "--input", type=Path, required=True, help="入力するゾーン")
     parser.add_argument("-o", "--output", type=Path, required=True, help="出力するゾーン")
     parser.add_argument("-d", "--origin", required=True, help="ゾーンのオリジン (例: example.jp.)")
     parser.add_argument("-m", "--mode", required=True, choices=MODES, help="生成する検証ケース")
@@ -183,6 +184,124 @@ def bitmap_contains(rdata: dns.rdata.Rdata, target_type: dns.rdatatype.RdataType
     if not isinstance(windows, tuple):
         raise TypeError("NSEC または NSEC3 レコードではありません")
     return target_type in bitmap_rdtypes(windows)
+
+
+def zone_names(zone: dns.zone.Zone) -> list[dns.name.Name]:
+    if zone.origin is None:
+        raise ValueError("ゾーンオリジンがありません")
+    return sorted(name.derelativize(zone.origin) for name in zone.nodes)
+
+
+def node_types(zone: dns.zone.Zone, name: dns.name.Name) -> list[dns.rdatatype.RdataType]:
+    relative_name = name.relativize(zone.origin)  # pyright: ignore
+    node = zone.get_node(relative_name)
+    if node is None:
+        return []
+    types = {
+        rdataset.rdtype
+        for rdataset in node.rdatasets
+        if rdataset.rdclass == IN
+        and rdataset.rdtype not in {dns.rdatatype.RRSIG, dns.rdatatype.NSEC3PARAM}
+    }
+    return sorted(types, key=int)
+
+
+def add_rdataset(
+    zone: dns.zone.Zone,
+    owner: dns.name.Name,
+    rdtype: dns.rdatatype.RdataType,
+    rdata: dns.rdata.Rdata,
+) -> None:
+    relative_owner = owner.relativize(zone.origin)  # pyright: ignore
+    node = zone.find_node(relative_owner, create=True)
+    rdataset = dns.rdataset.Rdataset(IN, rdtype)
+    rdataset.add(rdata)
+    node.replace_rdataset(rdataset)
+
+
+def generate_nsec_records(zone: dns.zone.Zone) -> int:
+    names = zone_names(zone)
+    if not names:
+        return 0
+    for index, owner in enumerate(names):
+        next_name = names[(index + 1) % len(names)]
+        types = [*node_types(zone, owner), dns.rdatatype.NSEC]
+        rdata = dns.rdata.from_text(
+            IN,
+            dns.rdatatype.NSEC,
+            f"{next_name.to_text()} {' '.join(dns.rdatatype.to_text(rdtype) for rdtype in types)}",
+            zone.origin,
+        )
+        add_rdataset(zone, owner, dns.rdatatype.NSEC, rdata)
+    return len(names)
+
+
+def nsec3_parameters(zone: dns.zone.Zone) -> tuple[int, int, int, bytes]:
+    if zone.origin is None:
+        raise ValueError("ゾーンオリジンがありません")
+    node = zone.get_node(zone.origin.relativize(zone.origin))
+    if node is not None:
+        for rdataset in node.rdatasets:
+            if rdataset.rdtype == dns.rdatatype.NSEC3PARAM:
+                parameter = next(iter(rdataset))
+                return parameter.algorithm, parameter.flags, parameter.iterations, parameter.salt
+    return 1, 0, 0, b""
+
+
+def generate_nsec3_records(zone: dns.zone.Zone, flags: int = 0) -> int:
+    names = zone_names(zone)
+    algorithm, _parameter_flags, iterations, salt = nsec3_parameters(zone)
+    if zone.origin is None:
+        raise ValueError("ゾーンオリジンがありません")
+    apex = zone.get_node(zone.origin.relativize(zone.origin))
+    has_parameters = apex is not None and any(
+        rdataset.rdtype == dns.rdatatype.NSEC3PARAM for rdataset in apex.rdatasets
+    )
+    if not has_parameters:
+        salt_text = salt.hex().upper() if salt else "-"
+        parameter = dns.rdata.from_text(
+            IN,
+            dns.rdatatype.NSEC3PARAM,
+            f"{algorithm} 0 {iterations} {salt_text}",
+            zone.origin,
+        )
+        add_rdataset(zone, zone.origin, dns.rdatatype.NSEC3PARAM, parameter)
+    hashed_names = sorted(
+        (
+            dns.dnssec.nsec3_hash(name, salt, iterations, algorithm),
+            name,
+        )
+        for name in names
+    )
+    if not hashed_names:
+        return 0
+    for index, (encoded_owner, original_name) in enumerate(hashed_names):
+        next_owner = hashed_names[(index + 1) % len(hashed_names)][0]
+        types = [*node_types(zone, original_name), dns.rdatatype.NSEC3]
+        salt_text = salt.hex().upper() if salt else "-"
+        rdata = dns.rdata.from_text(
+            IN,
+            dns.rdatatype.NSEC3,
+            f"{algorithm} {flags} {iterations} {salt_text} {next_owner} "
+            f"{' '.join(dns.rdatatype.to_text(rdtype) for rdtype in types)}",
+            zone.origin,
+        )
+        owner = dns.name.from_text(f"{encoded_owner}.{zone.origin}")
+        add_rdataset(zone, owner, dns.rdatatype.NSEC3, rdata)
+    return len(hashed_names)
+
+
+def ensure_denial_records(zone: dns.zone.Zone, mode: str) -> int:
+    rdtype = dns.rdatatype.NSEC3 if mode.startswith("nsec3-") else dns.rdatatype.NSEC
+    if any(
+        rdataset.rdtype == rdtype
+        for node in zone.nodes.values()
+        for rdataset in node.rdatasets
+    ):
+        return 0
+    if rdtype == dns.rdatatype.NSEC3:
+        return generate_nsec3_records(zone, flags=1 if mode == "nsec3-optout-cover-mismatch" else 0)
+    return generate_nsec_records(zone)
 
 
 def add_type_to_bitmap(
@@ -401,6 +520,8 @@ def main() -> None:
     else:
         if args.mode.startswith("nsec") and not args.target_name:
             raise SystemExit("--mode の nsec-* では --target-name が必要です")
+        if args.mode.startswith("nsec"):
+            ensure_denial_records(zone, args.mode)
         changed = modify_child_zone(zone, args.mode, args.target_name, target_type)
 
     if args.mode != "success" and not changed:

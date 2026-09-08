@@ -60,7 +60,7 @@ python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode
 
 加工対象となる `DS` は親ゾーンのものであり、加工対象となる `RRSIG` は子ゾーンのものです。同じ委任先について複数の失敗パターンを公開する場合は、毎回、元の正常な署名済みゾーンから個別に出力してください。
 
-`nsec-*` モードは NSEC/NSEC3 の RDATA を変更するため、**未署名ゾーンに対して実行してから署名**してください。署名済みゾーンに適用すると NSEC/NSEC3 の `RRSIG` も無効になるため、不在証明の不整合ではなく署名検証失敗になります。
+`nsec-*` モードは、入力ゾーンに NSEC/NSEC3 が存在しない場合でも、ゾーン内の名前から NSEC/NSEC3 と必要な NSEC3PARAM を生成してから RDATA を変更します。そのため、**未署名ゾーンに対して実行し、出力を署名**してください。署名済みゾーンに適用すると NSEC/NSEC3 の `RRSIG` も無効になるため、不在証明の不整合ではなく署名検証失敗になります。署名ツールが入力済みの NSEC/NSEC3 を再生成する設定の場合、破損内容が上書きされるため、生成済みレコードを保持する設定を使用してください。
 
 `*-cover-mismatch` は、存在しない名前に対する NXDOMAIN 応答のカバー範囲を壊します。AAAA レコードだけが存在する名前への A 問い合わせのような NODATA 応答には、`*-type-bitmap-mismatch` を使います。対象名のビットマップに A を追加すると、権威サーバーの A/NODATA 応答と不在証明が矛盾します。
 
@@ -119,7 +119,7 @@ NSEC3 署名済みゾーンを生成する構成では、同じ対象名に `--m
 
 Opt-Out NSEC3 のカバー範囲を壊す場合は、`--mode nsec3-optout-cover-mismatch` を指定します。対象名は、変更対象となる Opt-Out NSEC3 が実際に覆う名前にしてください。
 
-AAAA レコードだけを持つ `optout-cover-mismatch.nsec3.error.example.test.` の A/NODATA 不在証明を壊すには、該当する未署名子ゾーンに対して次のように実行してから署名します。
+AAAA レコードだけを持つ `optout-cover-mismatch.nsec3.error.example.test.` の A/NODATA 不在証明を壊すには、該当する未署名子ゾーンに対して次のように実行してから署名します。NSEC3PARAM が入力にない場合は、SHA-1、反復回数 0、ソルトなしの NSEC3PARAM を追加します。
 
 ```powershell
 python corrupt_zone.py `
