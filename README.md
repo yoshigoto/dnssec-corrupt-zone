@@ -15,20 +15,22 @@ DNSSEC ゾーンファイルを検証用に加工する Python スクリプト�
 
 依存するモジュールをインストールします。
 
-```powershell
-python -m pip install -r requirements.txt
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
 `uv` を使用する場合は次のコマンドでもインストールできます。
 
-```powershell
-uv pip install -r requirements.txt
+```bash
+uv venv
+uv pip install --python .venv/bin/python -r requirements.txt
 ```
 
 ## 使い方
 
 ```text
-python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode MODE [--target-name NAME] [--target-type TYPE] [--zsk-private-key PRIVATE_FILE] [--increment-serial]
+.venv/bin/python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode MODE [--target-name NAME] [--target-type TYPE] [--zsk-private-key PRIVATE_FILE] [--increment-serial]
 ```
 
 | 引数 | 説明 |
@@ -72,47 +74,47 @@ python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode
 
 親ゾーン `example.test.` にある `keytag.ds.error.example.test.` への委任の DS を壊します。
 
-```powershell
-python corrupt_zone.py `
-  --input example.test.zone.signed `
-  --output example.test.ds-keytag.zone.signed `
-  --origin example.test. `
-  --mode ds-keytag-mismatch `
+```bash
+.venv/bin/python corrupt_zone.py \
+  --input example.test.zone.signed \
+  --output example.test.ds-keytag.zone.signed \
+  --origin example.test. \
+  --mode ds-keytag-mismatch \
   --target-name keytag.ds.error.example.test.
 ```
 
 同じ親ゾーンで、DS の Digest 不整合と DS の署名破損を作成する例です。
 
-```powershell
-python corrupt_zone.py -i example.test.zone.signed -o example.test.ds-hash.zone.signed -d example.test. -m ds-hash-mismatch -t hash.ds.error.example.test.
-python corrupt_zone.py -i example.test.zone.signed -o example.test.ds-rrsig.zone.signed -d example.test. -m ds-rrsig-corrupt -t sign.ds.error.example.test.
+```bash
+.venv/bin/python corrupt_zone.py -i example.test.zone.signed -o example.test.ds-hash.zone.signed -d example.test. -m ds-hash-mismatch -t hash.ds.error.example.test.
+.venv/bin/python corrupt_zone.py -i example.test.zone.signed -o example.test.ds-rrsig.zone.signed -d example.test. -m ds-rrsig-corrupt -t sign.ds.error.example.test.
 ```
 
 子ゾーン `sign.dnskey.error.example.test.` の DNSKEY 署名を壊します。子ゾーンでは `--target-name` は不要です。
 
-```powershell
-python corrupt_zone.py `
-  --input sign.dnskey.error.example.test.zone.signed `
-  --output sign.dnskey.error.example.test.zone.signed-out `
-  --origin sign.dnskey.error.example.test. `
+```bash
+.venv/bin/python corrupt_zone.py \
+  --input sign.dnskey.error.example.test.zone.signed \
+  --output sign.dnskey.error.example.test.zone.signed-out \
+  --origin sign.dnskey.error.example.test. \
   --mode dnskey-rrsig-corrupt
 ```
 
 有効期限切れのケースでは `--mode dnskey-rrsig-expired` を指定します。
 
-```powershell
-python corrupt_zone.py -i expire.dnskey.error.example.test.zone.signed -o expire.dnskey.error.example.test.zone.signed-out -d expire.dnskey.error.example.test. -m dnskey-rrsig-expired
+```bash
+.venv/bin/python corrupt_zone.py -i expire.dnskey.error.example.test.zone.signed -o expire.dnskey.error.example.test.zone.signed-out -d expire.dnskey.error.example.test. -m dnskey-rrsig-expired
 ```
 
 存在しない `missing.error.example.test.` を覆う NSEC のカバー範囲を壊してから署名する例です。
 
-```powershell
-python corrupt_zone.py `
-  --input error.example.test.zone.signed `
-  --output error.example.test.nsec-cover.zone.signed `
-  --origin error.example.test. `
-  --mode nsec-cover-mismatch `
-  --target-name missing.error.example.test. `
+```bash
+.venv/bin/python corrupt_zone.py \
+  --input error.example.test.zone.signed \
+  --output error.example.test.nsec-cover.zone.signed \
+  --origin error.example.test. \
+  --mode nsec-cover-mismatch \
+  --target-name missing.error.example.test. \
   --zsk-private-key /path/to/Kexample.test.+008+12345.private
 ```
 
@@ -122,14 +124,14 @@ Opt-Out NSEC3 のカバー範囲を壊す場合は、`--mode nsec3-optout-cover-
 
 AAAA レコードだけを持つ `optout-cover-mismatch.nsec3.error.example.test.` の A/NODATA 不在証明を壊すには、正常に署名済みの子ゾーンに対して次のように実行します。
 
-```powershell
-python corrupt_zone.py `
-  --input optout-cover-mismatch.nsec3.error.example.test.zone.signed `
-  --output optout-cover-mismatch.nsec3.error.example.test.nsec3-bitmap.zone.signed `
-  --origin nsec3.error.example.test. `
-  --mode nsec3-type-bitmap-mismatch `
-  --target-name optout-cover-mismatch.nsec3.error.example.test. `
-  --target-type A `
+```bash
+.venv/bin/python corrupt_zone.py \
+  --input optout-cover-mismatch.nsec3.error.example.test.zone.signed \
+  --output optout-cover-mismatch.nsec3.error.example.test.nsec3-bitmap.zone.signed \
+  --origin nsec3.error.example.test. \
+  --mode nsec3-type-bitmap-mismatch \
+  --target-name optout-cover-mismatch.nsec3.error.example.test. \
+  --target-type A \
   --zsk-private-key /path/to/Knsec3.error.example.test.+008+12345.private
 ```
 
@@ -139,8 +141,8 @@ python corrupt_zone.py `
 
 NSEC/NSEC3 のカバー範囲、NODATA 型ビットマップ、NSEC3 Opt-Out の加工は、次のコマンドで検証できます。
 
-```powershell
-python -m unittest -v test_corrupt_zone.py
+```bash
+.venv/bin/python -m unittest -v test_corrupt_zone.py
 ```
 
 ## NSD への反映
@@ -200,10 +202,10 @@ zone:
 
 1. example.test.zone を編集
 1. `cp -p example.test.zone example.test.zone.orig`
-1. `python corrupt_zone.py -i example.test.zone -o example.test.ds-keytag.zone -m ds-keytag-mismatch -d example.test. -t keytag.ds.error.example.test.`
-1. `python corrupt_zone.py -i example.test.ds-keytag.zone -o example.test.ds-hash.zone -m ds-hash-mismatch -d example.test. -t hash.ds.error.example.test.`
+1. `.venv/bin/python corrupt_zone.py -i example.test.zone -o example.test.ds-keytag.zone -m ds-keytag-mismatch -d example.test. -t keytag.ds.error.example.test.`
+1. `.venv/bin/python corrupt_zone.py -i example.test.ds-keytag.zone -o example.test.ds-hash.zone -m ds-hash-mismatch -d example.test. -t hash.ds.error.example.test.`
 1. `cp -p example.test.ds-hash.zone example.test.zone`
 1. example.test.zone を署名 (`dnssec_sign_zone.sh` を利用)
-1. `python corrupt_zone.py -i example.test.zone.signed -o example.test.zone.ds-rrsig.signed -m ds-rrsig-corrupt -d example.test. -t sign.ds.error.example.test.`
+1. `.venv/bin/python corrupt_zone.py -i example.test.zone.signed -o example.test.zone.ds-rrsig.signed -m ds-rrsig-corrupt -d example.test. -t sign.ds.error.example.test.`
 1. `cp -p example.test.zone.ds-rrsig.signed example.test.zone.signed`
 1. 権威サーバーでゾーンファイルを再読み込み

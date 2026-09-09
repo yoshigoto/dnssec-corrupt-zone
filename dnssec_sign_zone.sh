@@ -11,8 +11,8 @@ FILE_NAME="$1"
 DOMAIN=`echo $1 | sed 's/.zone//g'`
 
 # ディレクトリ定義
-KEY_DIR="${2:-/usr/local/etc/nsd/keys}"
-ZONE_DIR="${3:-/usr/local/etc/nsd/zone}"
+KEY_DIR="${2:-/etc/nsd/keys}"
+ZONE_DIR="${3:-/etc/nsd/zones}"
 
 # ファイルパス定義
 ZONE_FILE="${ZONE_DIR}/${FILE_NAME}"
