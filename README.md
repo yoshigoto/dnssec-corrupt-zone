@@ -49,11 +49,11 @@ python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode
 | `--mode` | 加工するゾーン | 内容 | dnssec-check.jp の対応パターン |
 | --- | --- | --- | --- |
 | `success` | 親または子 | 変更せず出力 | 成功パターン |
-| `ds-keytag-mismatch` | 親 | 委任先 `DS` の Key Tag を1増やす | Key Tagミスマッチ |
+| `ds-keytag-mismatch` | 親 | 委任先 `DS` の Key Tag を1増やす | Key Tag ミスマッチ |
 | `ds-hash-mismatch` | 親 | 委任先 `DS` の Digest の末尾 1バイトを反転する | ハッシュ値ミスマッチ |
 | `ds-rrsig-corrupt` | 親 | 委任先 `DS` の電子署名データである `RRSIG` の署名値を破損する | DSリソースレコードの検証失敗 |
-| `dnskey-rrsig-corrupt` | 子 | ゾーン頂点の `DNSKEY` の電子署名データである `RRSIG` の署名値を破損する | DNSKEYリソースレコードの検証失敗 |
-| `dnskey-rrsig-expired` | 子 | ゾーン頂点の `DNSKEY` の電子署名データである `RRSIG` の有効期限を `2010-01-01T00:00:00Z` にする | DNSKEYリソースレコードの検証失敗（有効期限切れ） |
+| `dnskey-rrsig-corrupt` | 子 | ゾーンの頂点の `DNSKEY` の電子署名データである `RRSIG` の署名値を破損する | DNSKEYリソースレコードの検証失敗 |
+| `dnskey-rrsig-expired` | 子 | ゾーンの頂点の `DNSKEY` の電子署名データである `RRSIG` の有効期限を `2010-01-01T00:00:00Z` にする | DNSKEYリソースレコードの検証失敗（有効期限切れ） |
 | `nsec-cover-mismatch` | 子 | 指定名を覆う NSEC の Next Domain Name を所有者名にして、指定名をカバーしない状態にする | 不在証明のカバー不成立 |
 | `nsec3-cover-mismatch` | 子 | 指定名を覆う NSEC3 の Next Hashed Owner Name を所有者ハッシュにして、指定名をカバーしない状態にする | 不在証明のカバー不成立 |
 | `nsec3-optout-cover-mismatch` | 子 | 指定名を覆う Opt-Out フラグ付き NSEC3 だけを対象に、カバー範囲を壊す | Opt-Out 不在証明のカバー不成立 |

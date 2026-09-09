@@ -40,7 +40,7 @@ EXPIRED_AT = 1262304000  # 2010-01-01T00:00:00Z
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="DNSSEC ゾーンを dnssecvalidator 検証用に加工する"
+        description="DNSSEC ゾーンを DNSSEC委任状態検証ツールでの検証用に加工する"
     )
     parser.add_argument("-i", "--input", type=Path, required=True, help="入力するゾーン")
     parser.add_argument("-o", "--output", type=Path, required=True, help="出力するゾーン")
@@ -241,7 +241,7 @@ def find_zsk_dnskey(
         raise ValueError("ゾーンオリジンがありません")
     node = zone.get_node(zone.origin.relativize(zone.origin))
     if node is None:
-        raise ValueError("ゾーン頂点の DNSKEY が見つかりません")
+        raise ValueError("ゾーンの頂点の DNSKEY が見つかりません")
     for rdataset in node.rdatasets:
         if rdataset.rdclass != IN or rdataset.rdtype != dns.rdatatype.DNSKEY:
             continue
