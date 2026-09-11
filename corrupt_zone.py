@@ -6,7 +6,9 @@ import argparse
 import base64
 import binascii
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
+import re
 
 import dns.dnssec
 import dns.exception
@@ -21,6 +23,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 IN = dns.rdataclass.IN
 ZSK_ALGORITHM = 8
+DEFAULT_SIGNATURE_LIFETIME = 30 * 24 * 60 * 60
+LDNS_KEY_FILE = re.compile(r"^K(?P<domain>.+)\.\+(?P<algorithm>\d{3})\+(?P<key_tag>\d{5})\.key$")
 
 MODES = {
     "success": "成功パターン: 署名済みゾーンをそのまま出力",
@@ -60,6 +64,17 @@ def parse_args() -> argparse.Namespace:
         "--zsk-private-key",
         type=Path,
         help="nsec-* モードで RRSIG を再生成する ZSK の .private ファイル",
+    )
+    parser.add_argument(
+        "-k",
+        "--key-directory",
+        type=Path,
+        help="ldns-keygen 形式の KSK/ZSK 鍵ファイルがあるディレクトリ",
+    )
+    parser.add_argument(
+        "--sign-zone",
+        action="store_true",
+        help="加工後のゾーン全体を dnspython で署名する",
     )
     parser.add_argument(
         "-s",
@@ -202,6 +217,23 @@ def decode_private_value(value: str) -> int:
         raise ValueError(".private ファイルの Base64 値を読み込めませんでした") from error
 
 
+@dataclass(frozen=True)
+class LdnsSigningKey:
+    flags: int
+    algorithm: int
+    key_tag: int
+    public_path: Path
+    private_path: Path
+    private_key: rsa.RSAPrivateKey
+    dnskey: dns.rdata.Rdata
+
+
+@dataclass(frozen=True)
+class LdnsSigningKeys:
+    ksk: LdnsSigningKey
+    zsk: LdnsSigningKey
+
+
 def load_private_key(path: Path) -> rsa.RSAPrivateKey:
     values: dict[str, str] = {}
     try:
@@ -232,6 +264,87 @@ def load_private_key(path: Path) -> rsa.RSAPrivateKey:
         if isinstance(error, ValueError) and str(error).startswith("対応する"):
             raise
         raise ValueError(f"RSA 形式の .private ファイルを読み込めませんでした: {path}") from error
+
+
+def zone_domain_from_file_name(path: Path) -> str:
+    name = path.name
+    if name.endswith(".signed"):
+        name = name[: -len(".signed")]
+    if name.endswith(".zone"):
+        name = name[: -len(".zone")]
+    return name.rstrip(".")
+
+
+def load_ldns_dnskey(path: Path, origin: dns.name.Name) -> dns.rdata.Rdata:
+    try:
+        for line in path.read_text(encoding="ascii").splitlines():
+            if not line.strip() or line.lstrip().startswith(";"):
+                continue
+            fields = line.split()
+            if "DNSKEY" not in fields:
+                continue
+            dnskey_text = " ".join(fields[fields.index("DNSKEY") + 1 :])
+            return dns.rdata.from_text(IN, dns.rdatatype.DNSKEY, dnskey_text, origin)
+    except (OSError, dns.exception.DNSException) as error:
+        raise ValueError(f"DNSKEY ファイルを読み込めませんでした: {path}") from error
+    raise ValueError(f"DNSKEY レコードが見つかりませんでした: {path}")
+
+
+def load_ldns_signing_key(path: Path, origin: dns.name.Name) -> LdnsSigningKey:
+    match = LDNS_KEY_FILE.match(path.name)
+    if match is None:
+        raise ValueError(f"ldns-keygen 形式の鍵ファイル名ではありません: {path.name}")
+    private_path = path.with_suffix(".private")
+    if not private_path.is_file():
+        raise ValueError(f"秘密鍵ファイルが見つかりません: {private_path}")
+    dnskey = load_ldns_dnskey(path, origin)
+    algorithm = int(match.group("algorithm"))
+    key_tag = int(match.group("key_tag"))
+    if dnskey.algorithm != algorithm:
+        raise ValueError(f"鍵ファイル名と DNSKEY のアルゴリズムが一致しません: {path}")
+    if dns.dnssec.key_id(dnskey) != key_tag:
+        raise ValueError(f"鍵ファイル名と DNSKEY の Key Tag が一致しません: {path}")
+    return LdnsSigningKey(
+        flags=dnskey.flags,
+        algorithm=algorithm,
+        key_tag=key_tag,
+        public_path=path,
+        private_path=private_path,
+        private_key=load_private_key(private_path),
+        dnskey=dnskey,
+    )
+
+
+def find_ldns_signing_keys(
+    key_directory: Path, zone_file: Path, origin: dns.name.Name
+) -> LdnsSigningKeys:
+    domain = zone_domain_from_file_name(zone_file)
+    keys = []
+    for path in sorted(key_directory.glob("K*.key")):
+        match = LDNS_KEY_FILE.match(path.name)
+        if match is not None and match.group("domain") == domain:
+            keys.append(load_ldns_signing_key(path, origin))
+    ksks = [key for key in keys if key.flags == 257]
+    zsks = [key for key in keys if key.flags == 256]
+    if len(ksks) != 1 or len(zsks) != 1:
+        raise ValueError(
+            f"KSK (257) と ZSK (256) を 1 個ずつ特定できませんでした: domain={domain}, key_dir={key_directory}"
+        )
+    return LdnsSigningKeys(ksk=ksks[0], zsk=zsks[0])
+
+
+def sign_zone_with_ldns_keys(
+    zone: dns.zone.Zone, zone_file: Path, key_directory: Path
+) -> int:
+    if zone.origin is None:
+        raise ValueError("ゾーンオリジンがありません")
+    keys = find_ldns_signing_keys(key_directory, zone_file, zone.origin)
+    dns.dnssec.sign_zone(
+        zone,
+        keys=[(keys.zsk.private_key, keys.zsk.dnskey), (keys.ksk.private_key, keys.ksk.dnskey)],
+        lifetime=DEFAULT_SIGNATURE_LIFETIME,
+    )
+    return 2
 
 
 def find_zsk_dnskey(
@@ -674,8 +787,18 @@ def main() -> None:
         )
         changed = modify_child_zone(zone, args.mode, args.target_name, target_type)
         if args.mode.startswith("nsec") and changed:
-            if args.zsk_private_key is None:
-                raise SystemExit("nsec-* モードでは --zsk-private-key が必要です")
+            zsk_private_key = args.zsk_private_key
+            if zsk_private_key is None:
+                if args.key_directory is None:
+                    raise SystemExit(
+                        "nsec-* モードでは --zsk-private-key または --key-directory が必要です"
+                    )
+                try:
+                    zsk_private_key = find_ldns_signing_keys(
+                        args.key_directory, args.input, zone.origin
+                    ).zsk.private_path
+                except (OSError, ValueError, dns.exception.DNSException) as error:
+                    raise SystemExit(str(error)) from error
             after_denial = denial_rrset_snapshot(zone, denial_type)
             changed_owners = {
                 owner
@@ -684,7 +807,7 @@ def main() -> None:
             }
             try:
                 resigned = resign_denial_rrsets(
-                    zone, denial_type, args.zsk_private_key, changed_owners
+                    zone, denial_type, zsk_private_key, changed_owners
                 )
             except (OSError, ValueError, dns.exception.DNSException) as error:
                 raise SystemExit(str(error)) from error
@@ -700,6 +823,14 @@ def main() -> None:
             print("警告: SOA レコードが見つかりませんでした")
         else:
             print("SOA Serial をインクリメントしました")
+
+    if args.sign_zone:
+        if args.key_directory is None:
+            raise SystemExit("--sign-zone では --key-directory が必要です")
+        try:
+            sign_zone_with_ldns_keys(zone, args.input, args.key_directory)
+        except (OSError, ValueError, dns.exception.DNSException) as error:
+            raise SystemExit(str(error)) from error
 
     save_zone(zone, args.output, sorted_names=True, relativize=False, want_origin=True, chunksize=0)
     print(f"{MODES[args.mode]}: {args.output} (変更レコード数: {changed})")

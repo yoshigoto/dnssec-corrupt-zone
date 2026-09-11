@@ -1,7 +1,7 @@
 import unittest
 import base64
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 import dns.dnssec
 import dns.name
@@ -309,6 +309,74 @@ class CorruptZoneTests(unittest.TestCase):
             origin=ORIGIN,
         )
 
+    def test_find_ldns_signing_keys_uses_zone_file_name(self) -> None:
+        with TemporaryDirectory() as directory:
+            key_dir = Path(directory)
+            ksk_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            zsk_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            self._write_ldns_key_pair(key_dir, "example", ksk_private_key, flags=257)
+            self._write_ldns_key_pair(key_dir, "example", zsk_private_key, flags=256)
+
+            keys = corrupt_zone.find_ldns_signing_keys(
+                key_dir, Path("example.zone"), ORIGIN
+            )
+
+        self.assertEqual(keys.ksk.flags, 257)
+        self.assertEqual(keys.zsk.flags, 256)
+
+    def test_sign_zone_with_ldns_keys(self) -> None:
+        zone = dns.zone.from_text(
+            "@ 300 IN SOA ns.example. hostmaster.example. 1 3600 600 86400 300\n"
+            "@ 300 IN NS ns.example.\n"
+            "ns 300 IN A 192.0.2.53\n"
+            "www 300 IN A 192.0.2.1",
+            origin=ORIGIN,
+            relativize=True,
+            check_origin=False,
+        )
+        with TemporaryDirectory() as directory:
+            key_dir = Path(directory)
+            self._write_ldns_key_pair(
+                key_dir,
+                "example",
+                rsa.generate_private_key(public_exponent=65537, key_size=2048),
+                flags=257,
+            )
+            self._write_ldns_key_pair(
+                key_dir,
+                "example",
+                rsa.generate_private_key(public_exponent=65537, key_size=2048),
+                flags=256,
+            )
+
+            self.assertEqual(
+                corrupt_zone.sign_zone_with_ldns_keys(zone, Path("example.zone"), key_dir),
+                2,
+            )
+
+        dnskey_rdataset = next(
+            rdataset
+            for rdataset in zone.nodes[dns.name.empty].rdatasets
+            if rdataset.rdtype == dns.rdatatype.DNSKEY
+        )
+        soa_rdataset = next(
+            rdataset
+            for rdataset in zone.nodes[dns.name.empty].rdatasets
+            if rdataset.rdtype == dns.rdatatype.SOA
+        )
+        rrsig_rdataset = next(
+            rdataset
+            for rdataset in zone.nodes[dns.name.empty].rdatasets
+            if rdataset.rdtype == dns.rdatatype.RRSIG
+            and any(corrupt_zone.rrsig_covers(rrsig, dns.rdatatype.SOA) for rrsig in rdataset)
+        )
+        dns.dnssec.validate(
+            (ORIGIN, soa_rdataset),
+            (ORIGIN, rrsig_rdataset),
+            {ORIGIN: dnskey_rdataset},
+            origin=ORIGIN,
+        )
+
     @staticmethod
     def _nsec3_coverage_zone(flags: int) -> dns.zone.Zone:
         return dns.zone.from_text(
@@ -341,6 +409,22 @@ class CorruptZoneTests(unittest.TestCase):
                 f"Coefficient: {encode(numbers.iqmp)}",
                 "",
             ]
+        )
+
+    @classmethod
+    def _write_ldns_key_pair(
+        cls, key_dir: Path, domain: str, private_key: rsa.RSAPrivateKey, flags: int
+    ) -> None:
+        dnskey = dns.dnssec.make_dnskey(private_key.public_key(), 8, flags=flags)
+        key_tag = dns.dnssec.key_id(dnskey)
+        base_name = key_dir / f"K{domain}.+008+{key_tag:05d}"
+        Path(f"{base_name}.key").write_text(
+            f"{domain}. 300 IN DNSKEY {dnskey.to_text()}\n",
+            encoding="ascii",
+        )
+        Path(f"{base_name}.private").write_text(
+            cls._ldns_private_file(private_key),
+            encoding="ascii",
         )
 
     @staticmethod

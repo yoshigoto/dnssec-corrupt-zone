@@ -8,7 +8,8 @@ if [ -z "$1" ]; then
 fi
 
 FILE_NAME="$1"
-DOMAIN=`echo $1 | sed 's/.zone//g'`
+DOMAIN=${FILE_NAME%.signed}
+DOMAIN=${DOMAIN%.zone}
 
 # ディレクトリ定義
 KEY_DIR="${2:-/etc/nsd/keys}"
@@ -24,40 +25,21 @@ if [ ! -f "$ZONE_FILE" ]; then
     exit 1
 fi
 
-# 鍵ファイルの特定とKSK/ZSKの判定
-KSK_BASE=""
-ZSK_BASE=""
-
-for keyfile in "${KEY_DIR}"/K"${DOMAIN}".+*.key; do
-    # 該当する鍵がない場合のプレースホルダ展開をスキップ
-    [ -f "$keyfile" ] || continue
-    
-    # DNSKEYのキーワードの直後にあるフラグ値を取得
-    flags=$(awk '{
-        for(i=1; i<=NF; i++) {
-            if($i == "DNSKEY") {
-                print $(i+1);
-                exit;
-            }
-        }
-    }' "$keyfile")
-    
-    base_name="${keyfile%.key}"
-    
-    if [ "$flags" = "257" ]; then
-        KSK_BASE="$base_name"
-    elif [ "$flags" = "256" ]; then
-        ZSK_BASE="$base_name"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -z "${PYTHON:-}" ]; then
+    if [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
+        PYTHON="$SCRIPT_DIR/.venv/bin/python"
+    else
+        PYTHON=python3
     fi
-done
-
-# 鍵の存在チェック
-if [ -z "$KSK_BASE" ] || [ -z "$ZSK_BASE" ]; then
-    echo "Error: KSK (257) or ZSK (256) not found for $DOMAIN in $KEY_DIR" >&2
-    exit 1
 fi
 
-# 署名の実行
-ldns-signzone -f "$SIGNED_ZONE_FILE" "$ZONE_FILE" "$ZSK_BASE" "$KSK_BASE"
+"$PYTHON" "$SCRIPT_DIR/corrupt_zone.py" \
+    --input "$ZONE_FILE" \
+    --output "$SIGNED_ZONE_FILE" \
+    --origin "${DOMAIN}." \
+    --mode success \
+    --sign-zone \
+    --key-directory "$KEY_DIR"
 
 echo "Success: Signed zone file created at $SIGNED_ZONE_FILE"

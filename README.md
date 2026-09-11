@@ -2,7 +2,7 @@
 
 DNSSEC ゾーンファイルを検証用に加工する Python スクリプトです。親ゾーンの `DS`、子ゾーンの `DNSKEY` と否定応答に使われる NSEC/NSEC3 を意図的に不整合にします。[DNSSEC委任状態検証ツール](https://www.on-link.jp/dnssec-validator/) で、実際に壊れた事例を確認することができます。
 
-このツールは通常、ゾーン全体の署名や NSD の再読み込みを行いません。`nsec-*` モードだけは、指定された ZSK で変更対象 NSEC/NSEC3 RRset の RRSIG を再生成します。必要に応じて署名前、または署名済みのゾーンファイルを用意し、このツールで出力されたゾーンファイルを NSD で読み込ませてください。
+このツールは NSD の再読み込みを行いません。`--sign-zone` を指定すると、`ldns-keygen` 形式の鍵ファイルを使って dnspython でゾーン全体を署名します。`nsec-*` モードでは、指定された ZSK、または `--key-directory` から自動選択した ZSK で変更対象 NSEC/NSEC3 RRset の RRSIG を再生成します。必要に応じて署名前、または署名済みのゾーンファイルを用意し、このツールで出力されたゾーンファイルを NSD で読み込ませてください。
 
 なお、本ツールで作成したドメイン名のリストを、[DNSSEC信頼の連鎖確認ページ](https://www.dnssec-check.jp/) で公開しています。
 
@@ -30,7 +30,7 @@ uv pip install --python .venv/bin/python -r requirements.txt
 ## 使い方
 
 ```text
-.venv/bin/python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode MODE [--target-name NAME] [--target-type TYPE] [--zsk-private-key PRIVATE_FILE] [--increment-serial]
+.venv/bin/python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode MODE [--target-name NAME] [--target-type TYPE] [--zsk-private-key PRIVATE_FILE] [--key-directory KEY_DIR] [--sign-zone] [--increment-serial]
 ```
 
 | 引数 | 説明 |
@@ -41,7 +41,9 @@ uv pip install --python .venv/bin/python -r requirements.txt
 | `--mode`, `-m` | 後述する検証ケース |
 | `--target-name`, `-t` | 加工対象の名前 (`ds-*`、`nsec-*` モードでは必須)。`www` のような相対名は `--origin` に対して解決され、末尾に `.` がある名前は FQDN として扱われます |
 | `--target-type` | 型ビットマップ不整合モードで追加する問い合わせ型 (既定: `A`) |
-| `--zsk-private-key` | `nsec-*` モードで変更した NSEC/NSEC3 RRset を再署名する ZSK の `.private` ファイル (RSA/SHA-256、アルゴリズム番号 8) |
+| `--zsk-private-key` | `nsec-*` モードで変更した NSEC/NSEC3 RRset を再署名する ZSK の `.private` ファイル (RSA/SHA-256、アルゴリズム番号 8)。省略時は `--key-directory` から自動選択 |
+| `--key-directory`, `-k` | `ldns-keygen` 形式の KSK/ZSK 鍵ファイルがあるディレクトリ。ゾーンファイル名から `K<zone>.+008+<keytag>.key` を探し、DNSKEY フラグ 257 を KSK、256 を ZSK として選択する |
+| `--sign-zone` | 加工後のゾーン全体を dnspython で署名する |
 | `--increment-serial`, `-s` | SOA レコードの Serial を 1 インクリメントする |
 
 出力先ディレクトリが存在しない場合は作成されます。対象レコードが見つからない場合、ゾーンを出力せずエラー終了します。
@@ -64,7 +66,7 @@ uv pip install --python .venv/bin/python -r requirements.txt
 
 加工対象となる `DS` は親ゾーンのものであり、加工対象となる `RRSIG` は子ゾーンのものです。同じ委任先について複数の失敗パターンを公開する場合は、毎回、元の正常な署名済みゾーンから個別に出力してください。
 
-`nsec-*` モードは、**NSEC/NSEC3 とその RRSIG を含む署名済みゾーン**に対して実行します。NSEC/NSEC3 の RDATA を変更した後、`--zsk-private-key` で指定した ZSK を使って変更対象 RRset の RRSIG だけを再生成します。秘密鍵は `ldns-keygen` または `dnssec-keygen` で生成した RSA/SHA-256（アルゴリズム番号 8）の `.private` ファイルを指定してください。未署名ゾーンや NSEC/NSEC3 がないゾーンでは対象レコードを変更できません。
+`nsec-*` モードは、**NSEC/NSEC3 とその RRSIG を含む署名済みゾーン**に対して実行します。NSEC/NSEC3 の RDATA を変更した後、`--zsk-private-key` で指定した ZSK、または `--key-directory` から自動選択した ZSK を使って変更対象 RRset の RRSIG だけを再生成します。秘密鍵は `ldns-keygen` で生成した RSA/SHA-256（アルゴリズム番号 8）の `.private` ファイルを指定してください。未署名ゾーンや NSEC/NSEC3 がないゾーンでは対象レコードを変更できません。
 
 `*-cover-mismatch` は、存在しない名前に対する NXDOMAIN 応答のカバー範囲を壊します。AAAA レコードだけが存在する名前への A 問い合わせのような NODATA 応答には、`*-type-bitmap-mismatch` を使います。対象名のビットマップに A を追加すると、権威サーバーの A/NODATA 応答と不在証明が矛盾します。
 
@@ -115,10 +117,10 @@ uv pip install --python .venv/bin/python -r requirements.txt
   --origin error.example.test. \
   --mode nsec-cover-mismatch \
   --target-name missing.error.example.test. \
-  --zsk-private-key /path/to/Kexample.test.+008+12345.private
+  --key-directory /path/to/keys
 ```
 
-入力の未署名ゾーンから `dnssec_sign_zone.sh` で正常な署名済みゾーンを先に作成し、その出力を `--input` に指定してください。NSEC3 署名済みゾーンを対象にする場合は、同じ対象名に `--mode nsec3-cover-mismatch` を指定します。
+入力の未署名ゾーンから `dnssec_sign_zone.sh` で正常な署名済みゾーンを先に作成し、その出力を `--input` に指定してください。このスクリプトは `ldns-signzone` ではなく dnspython を使います。NSEC3 署名済みゾーンを対象にする場合は、同じ対象名に `--mode nsec3-cover-mismatch` を指定します。
 
 Opt-Out NSEC3 のカバー範囲を壊す場合は、`--mode nsec3-optout-cover-mismatch` を指定します。対象名は、変更対象となる Opt-Out NSEC3 が実際に覆う名前にしてください。
 
@@ -132,7 +134,7 @@ AAAA レコードだけを持つ `optout-cover-mismatch.nsec3.error.example.test
   --mode nsec3-type-bitmap-mismatch \
   --target-name optout-cover-mismatch.nsec3.error.example.test. \
   --target-type A \
-  --zsk-private-key /path/to/Knsec3.error.example.test.+008+12345.private
+  --key-directory /path/to/keys
 ```
 
 通常の NSEC ゾーンでは `--mode nsec-type-bitmap-mismatch` を指定します。`--target-type` は省略時に `A` となるため、上の例では省略可能です。
@@ -166,7 +168,7 @@ zone:
 ## ゾーンファイルへの署名について
 
 未署名のゾーンファイルから署名済みゾーンファイルを生成するためのシェルスクリプト `dnssec_sign_zone.sh` を利用できます。
-このスクリプトは `ldns-signzone` を用いて、指定された鍵ディレクトリから KSK（フラグ 257）および ZSK（フラグ 256）を自動識別してゾーンに署名します。
+このスクリプトは dnspython を用いて、指定された鍵ディレクトリから KSK（フラグ 257）および ZSK（フラグ 256）を自動識別してゾーンに署名します。鍵ファイル名は `ldns-keygen` の `K<zone>.+008+<keytag>.key` / `.private` 形式を想定しています。
 
 ### 使い方
 
@@ -177,8 +179,8 @@ zone:
 | 引数 | 説明 | デフォルト値 |
 | --- | --- | --- |
 | `<zone_file_name>` | 署名対象のゾーンファイル名 | (必須) |
-| `[key_dir]` | KSK / ZSK 鍵ファイルが配置されているディレクトリ | `/usr/local/etc/nsd/keys` |
-| `[zone_dir]` | ゾーンファイルが配置されているディレクトリ | `/usr/local/etc/nsd/zone` |
+| `[key_dir]` | KSK / ZSK 鍵ファイルが配置されているディレクトリ | `/etc/nsd/keys` |
+| `[zone_dir]` | ゾーンファイルが配置されているディレクトリ | `/etc/nsd/zones` |
 
 ### 実行例
 
@@ -205,7 +207,7 @@ zone:
 1. `.venv/bin/python corrupt_zone.py -i example.test.zone -o example.test.ds-keytag.zone -m ds-keytag-mismatch -d example.test. -t keytag.ds.error.example.test.`
 1. `.venv/bin/python corrupt_zone.py -i example.test.ds-keytag.zone -o example.test.ds-hash.zone -m ds-hash-mismatch -d example.test. -t hash.ds.error.example.test.`
 1. `cp -p example.test.ds-hash.zone example.test.zone`
-1. example.test.zone を署名 (`dnssec_sign_zone.sh` を利用)
+1. example.test.zone を署名 (`dnssec_sign_zone.sh`、または `corrupt_zone.py --sign-zone --key-directory <key_dir>` を利用)
 1. `.venv/bin/python corrupt_zone.py -i example.test.zone.signed -o example.test.zone.ds-rrsig.signed -m ds-rrsig-corrupt -d example.test. -t sign.ds.error.example.test.`
 1. `cp -p example.test.zone.ds-rrsig.signed example.test.zone.signed`
 1. 権威サーバーでゾーンファイルを再読み込み
