@@ -19,10 +19,15 @@ import dns.rdataset
 import dns.rdatatype
 import dns.rdtypes.util
 import dns.zone
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, ed448, rsa
 
 IN = dns.rdataclass.IN
-ZSK_ALGORITHM = 8
+SUPPORTED_ALGORITHMS: dict[int, str] = {
+    dns.dnssec.RSASHA256: "RSASHA256",
+    dns.dnssec.ECDSAP256SHA256: "ECDSAP256SHA256",
+    dns.dnssec.ED25519: "ED25519",
+    dns.dnssec.ED448: "ED448",
+}
 DEFAULT_SIGNATURE_LIFETIME = 30 * 24 * 60 * 60
 LDNS_KEY_FILE = re.compile(r"^K(?P<domain>.+)\.\+(?P<algorithm>\d{3})\+(?P<key_tag>\d{5})\.key$")
 
@@ -219,12 +224,24 @@ def bitmap_contains(rdata: dns.rdata.Rdata, target_type: dns.rdatatype.RdataType
     return target_type in bitmap_rdtypes(windows)
 
 
-def decode_private_value(value: str) -> int:
+def decode_private_bytes(value: str) -> bytes:
     try:
         value += "=" * (-len(value) % 4)
-        return int.from_bytes(base64.b64decode(value, validate=True), "big")
+        return base64.b64decode(value, validate=True)
     except (ValueError, binascii.Error) as error:
         raise ValueError(".private ファイルの Base64 値を読み込めませんでした") from error
+
+
+def decode_private_value(value: str) -> int:
+    return int.from_bytes(decode_private_bytes(value), "big")
+
+
+PrivateKey = (
+    rsa.RSAPrivateKey
+    | ec.EllipticCurvePrivateKey
+    | ed25519.Ed25519PrivateKey
+    | ed448.Ed448PrivateKey
+)
 
 
 @dataclass(frozen=True)
@@ -234,7 +251,7 @@ class LdnsSigningKey:
     key_tag: int
     public_path: Path
     private_path: Path
-    private_key: rsa.RSAPrivateKey
+    private_key: PrivateKey
     dnskey: dns.rdata.Rdata
 
 
@@ -244,7 +261,7 @@ class LdnsSigningKeys:
     zsk: LdnsSigningKey
 
 
-def load_private_key(path: Path) -> rsa.RSAPrivateKey:
+def load_private_key(path: Path) -> PrivateKey:
     values: dict[str, str] = {}
     try:
         for line in path.read_text(encoding="ascii").splitlines():
@@ -253,27 +270,43 @@ def load_private_key(path: Path) -> rsa.RSAPrivateKey:
             name, value = line.split(":", 1)
             values[name.strip()] = value.strip()
         algorithm = int(values["Algorithm"].split("(", 1)[0].strip())
-        if algorithm != ZSK_ALGORITHM:
-            raise ValueError(
-                f"対応する鍵アルゴリズムは RSA/SHA-256 (8) だけです: {algorithm}"
+        if algorithm not in SUPPORTED_ALGORITHMS:
+            supported_names = ", ".join(
+                f"{name} ({alg})" for alg, name in SUPPORTED_ALGORITHMS.items()
             )
-        numbers = rsa.RSAPrivateNumbers(
-            p=decode_private_value(values["Prime1"]),
-            q=decode_private_value(values["Prime2"]),
-            d=decode_private_value(values["PrivateExponent"]),
-            dmp1=decode_private_value(values["Exponent1"]),
-            dmq1=decode_private_value(values["Exponent2"]),
-            iqmp=decode_private_value(values["Coefficient"]),
-            public_numbers=rsa.RSAPublicNumbers(
-                e=decode_private_value(values["PublicExponent"]),
-                n=decode_private_value(values["Modulus"]),
-            ),
-        )
-        return numbers.private_key()
+            raise ValueError(
+                f"対応していない鍵アルゴリズムです: {algorithm} (対応: {supported_names})"
+            )
+        if algorithm == dns.dnssec.RSASHA256:
+            numbers = rsa.RSAPrivateNumbers(
+                p=decode_private_value(values["Prime1"]),
+                q=decode_private_value(values["Prime2"]),
+                d=decode_private_value(values["PrivateExponent"]),
+                dmp1=decode_private_value(values["Exponent1"]),
+                dmq1=decode_private_value(values["Exponent2"]),
+                iqmp=decode_private_value(values["Coefficient"]),
+                public_numbers=rsa.RSAPublicNumbers(
+                    e=decode_private_value(values["PublicExponent"]),
+                    n=decode_private_value(values["Modulus"]),
+                ),
+            )
+            return numbers.private_key()
+        if algorithm == dns.dnssec.ECDSAP256SHA256:
+            raw = decode_private_bytes(values["PrivateKey"])
+            return ec.derive_private_key(int.from_bytes(raw, "big"), ec.SECP256R1())
+        if algorithm == dns.dnssec.ED25519:
+            raw = decode_private_bytes(values["PrivateKey"])
+            return ed25519.Ed25519PrivateKey.from_private_bytes(raw)
+        if algorithm == dns.dnssec.ED448:
+            raw = decode_private_bytes(values["PrivateKey"])
+            return ed448.Ed448PrivateKey.from_private_bytes(raw)
+        raise ValueError(f"未対応の鍵アルゴリズムです: {algorithm}")
     except (KeyError, OSError, ValueError) as error:
-        if isinstance(error, ValueError) and str(error).startswith("対応する鍵"):
+        if isinstance(error, ValueError) and (
+            str(error).startswith("対応していない") or str(error).startswith("未対応")
+        ):
             raise
-        raise ValueError(f"RSA 形式の .private ファイルを読み込めませんでした: {path}") from error
+        raise ValueError(f".private ファイルを読み込めませんでした: {path}") from error
 
 
 def zone_domain_from_file_name(path: Path) -> str:
@@ -369,7 +402,7 @@ def find_zsk_dnskey(
         if rdataset.rdclass != IN or rdataset.rdtype != dns.rdatatype.DNSKEY:
             continue
         for dnskey in rdataset:
-            if dnskey.flags & 0x0100 and dnskey.algorithm == algorithm == ZSK_ALGORITHM:
+            if dnskey.flags & 0x0100 and dnskey.algorithm == algorithm and algorithm in SUPPORTED_ALGORITHMS:
                 if dns.dnssec.key_id(dnskey) == key_tag:
                     return dnskey
     raise ValueError(
