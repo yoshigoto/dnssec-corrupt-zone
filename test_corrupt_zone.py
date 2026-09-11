@@ -2,6 +2,7 @@ import unittest
 import base64
 from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
+from unittest.mock import patch
 
 import dns.dnssec
 import dns.name
@@ -377,6 +378,147 @@ class CorruptZoneTests(unittest.TestCase):
             origin=ORIGIN,
         )
 
+    def test_main_signs_then_corrupts_dnskey_rrsig(self) -> None:
+        with TemporaryDirectory() as directory:
+            work_dir = Path(directory)
+            input_path = work_dir / "example.zone"
+            output_path = work_dir / "example.dnskey-rrsig-corrupt.zone.signed"
+            key_dir = work_dir / "keys"
+            key_dir.mkdir()
+            input_path.write_text(self._unsigned_zone_text(), encoding="ascii")
+            self._write_ldns_key_pair(
+                key_dir,
+                "example",
+                rsa.generate_private_key(public_exponent=65537, key_size=2048),
+                flags=257,
+            )
+            self._write_ldns_key_pair(
+                key_dir,
+                "example",
+                rsa.generate_private_key(public_exponent=65537, key_size=2048),
+                flags=256,
+            )
+
+            with patch(
+                "sys.argv",
+                [
+                    "corrupt_zone.py",
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(output_path),
+                    "--origin",
+                    "example.",
+                    "--mode",
+                    "dnskey-rrsig-corrupt",
+                    "--key-directory",
+                    str(key_dir),
+                    "--sign-zone",
+                ],
+            ):
+                corrupt_zone.main()
+
+            zone = dns.zone.from_file(
+                str(output_path), origin=ORIGIN, relativize=False, check_origin=False
+            )
+
+        dnskey_rdataset = next(
+            rdataset
+            for rdataset in zone.nodes[ORIGIN].rdatasets
+            if rdataset.rdtype == dns.rdatatype.DNSKEY
+        )
+        rrsig_rdataset = next(
+            rdataset
+            for rdataset in zone.nodes[ORIGIN].rdatasets
+            if rdataset.rdtype == dns.rdatatype.RRSIG
+            and any(corrupt_zone.rrsig_covers(rrsig, dns.rdatatype.DNSKEY) for rrsig in rdataset)
+        )
+        with self.assertRaises(dns.dnssec.ValidationFailure):
+            dns.dnssec.validate(
+                (ORIGIN, dnskey_rdataset),
+                (ORIGIN, rrsig_rdataset),
+                {ORIGIN: dnskey_rdataset},
+                origin=ORIGIN,
+            )
+
+    def test_main_signs_then_corrupts_and_resigns_nsec(self) -> None:
+        with TemporaryDirectory() as directory:
+            work_dir = Path(directory)
+            input_path = work_dir / "example.zone"
+            output_path = work_dir / "example.nsec-cover.zone.signed"
+            key_dir = work_dir / "keys"
+            key_dir.mkdir()
+            input_path.write_text(self._unsigned_zone_text(), encoding="ascii")
+            self._write_ldns_key_pair(
+                key_dir,
+                "example",
+                rsa.generate_private_key(public_exponent=65537, key_size=2048),
+                flags=257,
+            )
+            self._write_ldns_key_pair(
+                key_dir,
+                "example",
+                rsa.generate_private_key(public_exponent=65537, key_size=2048),
+                flags=256,
+            )
+
+            with patch(
+                "sys.argv",
+                [
+                    "corrupt_zone.py",
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(output_path),
+                    "--origin",
+                    "example.",
+                    "--mode",
+                    "nsec-cover-mismatch",
+                    "--target-name",
+                    "missing.example.",
+                    "--key-directory",
+                    str(key_dir),
+                    "--sign-zone",
+                ],
+            ):
+                corrupt_zone.main()
+
+            zone = dns.zone.from_file(
+                str(output_path), origin=ORIGIN, relativize=False, check_origin=False
+            )
+
+        dnskey_rdataset = next(
+            rdataset
+            for rdataset in zone.nodes[ORIGIN].rdatasets
+            if rdataset.rdtype == dns.rdatatype.DNSKEY
+        )
+        for owner, node in zone.nodes.items():
+            nsec_rdataset = next(
+                (rdataset for rdataset in node.rdatasets if rdataset.rdtype == dns.rdatatype.NSEC),
+                None,
+            )
+            if nsec_rdataset is None:
+                continue
+            absolute_owner = owner.derelativize(ORIGIN)
+            if any(
+                getattr(nsec, "next").derelativize(ORIGIN) == absolute_owner
+                for nsec in nsec_rdataset
+            ):
+                rrsig_rdataset = next(
+                    rdataset
+                    for rdataset in node.rdatasets
+                    if rdataset.rdtype == dns.rdatatype.RRSIG
+                    and any(corrupt_zone.rrsig_covers(rrsig, dns.rdatatype.NSEC) for rrsig in rdataset)
+                )
+                dns.dnssec.validate(
+                    (absolute_owner, nsec_rdataset),
+                    (absolute_owner, rrsig_rdataset),
+                    {ORIGIN: dnskey_rdataset},
+                    origin=ORIGIN,
+                )
+                return
+        self.fail("壊れた NSEC レコードが見つかりませんでした")
+
     @staticmethod
     def _nsec3_coverage_zone(flags: int) -> dns.zone.Zone:
         return dns.zone.from_text(
@@ -385,6 +527,16 @@ class CorruptZoneTests(unittest.TestCase):
             origin=ORIGIN,
             relativize=True,
             check_origin=False,
+        )
+
+    @staticmethod
+    def _unsigned_zone_text() -> str:
+        return (
+            "$ORIGIN example.\n"
+            "@ 300 IN SOA ns.example. hostmaster.example. 1 3600 600 86400 300\n"
+            "@ 300 IN NS ns.example.\n"
+            "ns 300 IN A 192.0.2.53\n"
+            "www 300 IN A 192.0.2.1\n"
         )
 
     @staticmethod

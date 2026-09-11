@@ -40,6 +40,16 @@ MODES = {
     "nsec3-type-bitmap-mismatch": "子ゾーン: 指定名の NSEC3 型ビットマップを不整合にする",
 }
 EXPIRED_AT = 1262304000  # 2010-01-01T00:00:00Z
+POST_SIGN_MODES = {
+    "ds-rrsig-corrupt",
+    "dnskey-rrsig-corrupt",
+    "dnskey-rrsig-expired",
+    "nsec-cover-mismatch",
+    "nsec3-cover-mismatch",
+    "nsec3-optout-cover-mismatch",
+    "nsec-type-bitmap-mismatch",
+    "nsec3-type-bitmap-mismatch",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -245,7 +255,7 @@ def load_private_key(path: Path) -> rsa.RSAPrivateKey:
         algorithm = int(values["Algorithm"].split("(", 1)[0].strip())
         if algorithm != ZSK_ALGORITHM:
             raise ValueError(
-                f"対応する ZSK アルゴリズムは RSA/SHA-256 (8) だけです: {algorithm}"
+                f"対応する鍵アルゴリズムは RSA/SHA-256 (8) だけです: {algorithm}"
             )
         numbers = rsa.RSAPrivateNumbers(
             p=decode_private_value(values["Prime1"]),
@@ -261,7 +271,7 @@ def load_private_key(path: Path) -> rsa.RSAPrivateKey:
         )
         return numbers.private_key()
     except (KeyError, OSError, ValueError) as error:
-        if isinstance(error, ValueError) and str(error).startswith("対応する"):
+        if isinstance(error, ValueError) and str(error).startswith("対応する鍵"):
             raise
         raise ValueError(f"RSA 形式の .private ファイルを読み込めませんでした: {path}") from error
 
@@ -761,6 +771,61 @@ def denial_rrset_snapshot(
     }
 
 
+def required_denial_type(mode: str) -> dns.rdatatype.RdataType | None:
+    if mode.startswith("nsec3-"):
+        return dns.rdatatype.NSEC3
+    if mode.startswith("nsec-"):
+        return dns.rdatatype.NSEC
+    return None
+
+
+def modify_zone_for_mode(
+    zone: dns.zone.Zone,
+    mode: str,
+    target_name: str | None,
+    target_type: dns.rdatatype.RdataType,
+) -> int:
+    if mode == "success":
+        return 0
+    if mode.startswith("ds-"):
+        if not target_name:
+            raise ValueError("--mode の ds-* では --target-name が必要です")
+        return modify_parent_zone(zone, mode, target_name)
+    if mode.startswith("nsec") and not target_name:
+        raise ValueError("--mode の nsec-* では --target-name が必要です")
+    return modify_child_zone(zone, mode, target_name, target_type)
+
+
+def resign_changed_denial_rrsets(
+    zone: dns.zone.Zone,
+    mode: str,
+    zsk_private_key: Path,
+    before_denial: dict[dns.name.Name, tuple[str, ...]],
+) -> int:
+    denial_type = required_denial_type(mode)
+    if denial_type is None:
+        return 0
+    after_denial = denial_rrset_snapshot(zone, denial_type)
+    changed_owners = {
+        owner
+        for owner, records in after_denial.items()
+        if records != before_denial.get(owner)
+    }
+    return resign_denial_rrsets(zone, denial_type, zsk_private_key, changed_owners)
+
+
+def zsk_private_key_from_args(
+    args: argparse.Namespace, zone: dns.zone.Zone
+) -> Path:
+    if args.zsk_private_key is not None:
+        return args.zsk_private_key
+    if args.key_directory is None:
+        raise ValueError("nsec-* モードでは --zsk-private-key または --key-directory が必要です")
+    if zone.origin is None:
+        raise ValueError("ゾーンオリジンがありません")
+    return find_ldns_signing_keys(args.key_directory, args.input, zone.origin).zsk.private_path
+
+
 def main() -> None:
     args = parse_args()
     origin = make_absolute_name(args.origin, dns.name.root)
@@ -770,51 +835,33 @@ def main() -> None:
     except dns.exception.DNSException as error:
         raise SystemExit(f"不正な --target-type です: {args.target_type}") from error
 
-    if args.mode == "success":
-        changed = 0
-    elif args.mode.startswith("ds-"):
-        if not args.target_name:
-            raise SystemExit("--mode の ds-* では --target-name が必要です")
-        changed = modify_parent_zone(zone, args.mode, args.target_name)
-    else:
-        if args.mode.startswith("nsec") and not args.target_name:
-            raise SystemExit("--mode の nsec-* では --target-name が必要です")
-        denial_type = (
-            dns.rdatatype.NSEC3 if args.mode.startswith("nsec3-") else dns.rdatatype.NSEC
-        )
-        before_denial = (
-            denial_rrset_snapshot(zone, denial_type) if args.mode.startswith("nsec") else {}
-        )
-        changed = modify_child_zone(zone, args.mode, args.target_name, target_type)
-        if args.mode.startswith("nsec") and changed:
-            zsk_private_key = args.zsk_private_key
-            if zsk_private_key is None:
-                if args.key_directory is None:
-                    raise SystemExit(
-                        "nsec-* モードでは --zsk-private-key または --key-directory が必要です"
-                    )
-                try:
-                    zsk_private_key = find_ldns_signing_keys(
-                        args.key_directory, args.input, zone.origin
-                    ).zsk.private_path
-                except (OSError, ValueError, dns.exception.DNSException) as error:
-                    raise SystemExit(str(error)) from error
-            after_denial = denial_rrset_snapshot(zone, denial_type)
-            changed_owners = {
-                owner
-                for owner, records in after_denial.items()
-                if records != before_denial.get(owner)
-            }
-            try:
-                resigned = resign_denial_rrsets(
-                    zone, denial_type, zsk_private_key, changed_owners
-                )
-            except (OSError, ValueError, dns.exception.DNSException) as error:
-                raise SystemExit(str(error)) from error
-            if not resigned:
-                raise SystemExit("変更対象 RRset の RRSIG が見つかりませんでした")
+    post_sign_modify = args.sign_zone and args.mode in POST_SIGN_MODES
 
-    if args.mode != "success" and not changed:
+    try:
+        if post_sign_modify:
+            if required_denial_type(args.mode) is not None:
+                ensure_denial_records(zone, args.mode)
+            changed = 0
+        else:
+            before_denial = (
+                denial_rrset_snapshot(zone, required_denial_type(args.mode))
+                if required_denial_type(args.mode) is not None
+                else {}
+            )
+            changed = modify_zone_for_mode(zone, args.mode, args.target_name, target_type)
+            if required_denial_type(args.mode) is not None and changed:
+                resigned = resign_changed_denial_rrsets(
+                    zone,
+                    args.mode,
+                    zsk_private_key_from_args(args, zone),
+                    before_denial,
+                )
+                if not resigned:
+                    raise ValueError("変更対象 RRset の RRSIG が見つかりませんでした")
+    except (OSError, ValueError, dns.exception.DNSException) as error:
+        raise SystemExit(str(error)) from error
+
+    if args.mode != "success" and not post_sign_modify and not changed:
         raise SystemExit(f"対象レコードが見つかりませんでした: {MODES[args.mode]}")
 
     if args.increment_serial:
@@ -829,8 +876,27 @@ def main() -> None:
             raise SystemExit("--sign-zone では --key-directory が必要です")
         try:
             sign_zone_with_ldns_keys(zone, args.input, args.key_directory)
+            if post_sign_modify:
+                before_denial = (
+                    denial_rrset_snapshot(zone, required_denial_type(args.mode))
+                    if required_denial_type(args.mode) is not None
+                    else {}
+                )
+                changed = modify_zone_for_mode(zone, args.mode, args.target_name, target_type)
+                if required_denial_type(args.mode) is not None and changed:
+                    resigned = resign_changed_denial_rrsets(
+                        zone,
+                        args.mode,
+                        zsk_private_key_from_args(args, zone),
+                        before_denial,
+                    )
+                    if not resigned:
+                        raise ValueError("変更対象 RRset の RRSIG が見つかりませんでした")
         except (OSError, ValueError, dns.exception.DNSException) as error:
             raise SystemExit(str(error)) from error
+
+    if args.mode != "success" and post_sign_modify and not changed:
+        raise SystemExit(f"対象レコードが見つかりませんでした: {MODES[args.mode]}")
 
     save_zone(zone, args.output, sorted_names=True, relativize=False, want_origin=True, chunksize=0)
     print(f"{MODES[args.mode]}: {args.output} (変更レコード数: {changed})")
