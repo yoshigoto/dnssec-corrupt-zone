@@ -171,39 +171,6 @@ zone:
 - `nsec-*` モードでは、変更した NSEC/NSEC3 RRset の RRSIG だけを ZSK で再生成します。それ以外の署名は再計算しません。
 - 署名および RRSIG の再生成は RSASHA256 (8)、ECDSAP256SHA256 (13)、ED25519 (15)、ED448 (16) の鍵に対応しています。
 
-## ゾーンファイルへの署名について
-
-未署名のゾーンファイルから署名済みゾーンファイルを生成するためのシェルスクリプト `dnssec_sign_zone.sh` を利用できます。
-このスクリプトは dnspython を用いて、指定された鍵ディレクトリから KSK（フラグ 257）および ZSK（フラグ 256）を自動識別してゾーンに署名します。鍵ファイル名は `ldns-keygen` の `K<zone>.+<algorithm>+<keytag>.key` 形式を想定し、対応する秘密鍵として同じベース名の `.private` が存在することを確認して採用します。
-
-### 使い方
-
-```bash
-./dnssec_sign_zone.sh <zone_file_name> [key_dir] [zone_dir]
-```
-
-| 引数 | 説明 | デフォルト値 |
-| --- | --- | --- |
-| `<zone_file_name>` | 署名対象のゾーンファイル名 | (必須) |
-| `[key_dir]` | KSK / ZSK 鍵ファイルが配置されているディレクトリ | `/etc/nsd/keys` |
-| `[zone_dir]` | ゾーンファイルが配置されているディレクトリ | `/etc/nsd/zones` |
-
-### 実行例
-
-デフォルトのディレクトリ設定で署名する場合:
-
-```bash
-./dnssec_sign_zone.sh example.test.zone
-```
-
-鍵ディレクトリやゾーンファイルのディレクトリを指定する場合:
-
-```bash
-./dnssec_sign_zone.sh example.test.zone /path/to/keys /path/to/zones
-```
-
-実行が成功すると、対象のゾーンファイルが存在するディレクトリに `<zone_file_name>.signed` （例: `example.test.zone.signed`）が生成されます。
-
 ## 親ゾーンの更新について
 
 親ゾーンについては、未署名の親ゾーンを入力し、`--sign-zone` と `--key-directory` を指定することで、個別に事象を発生させることができます。`ds-keytag-mismatch` と `ds-hash-mismatch` は DS を変更してから署名し、`ds-rrsig-corrupt` は署名後に `RRSIG DS` を壊します。
