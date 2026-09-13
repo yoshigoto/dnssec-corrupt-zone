@@ -61,7 +61,7 @@ POST_SIGN_MODES = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="DNSSEC ゾーンを DNSSEC委任状態検証ツールでの検証用に加工する"
+        description="DNSSEC ゾーンを DNSSEC 委任状態検証ツールでの検証用に加工する"
     )
     parser.add_argument("-i", "--input", type=Path, required=True, help="入力するゾーン")
     parser.add_argument("-o", "--output", type=Path, required=True, help="出力するゾーン")

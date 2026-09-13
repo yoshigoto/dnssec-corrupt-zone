@@ -1,10 +1,10 @@
 # dnssec-corrupt-zone
 
-DNSSEC ゾーンファイルを検証用に加工する Python スクリプトです。親ゾーンの `DS`、子ゾーンの `DNSKEY` と否定応答に使われる NSEC/NSEC3 を意図的に不整合にします。[DNSSEC委任状態検証ツール](https://www.on-link.jp/dnssec-validator/) で、実際に壊れた事例を確認することができます。
+DNSSEC ゾーンファイルを検証用に加工する Python スクリプトです。親ゾーンの `DS`、子ゾーンの `DNSKEY` と否定応答に使われる NSEC/NSEC3 を意図的に不整合にします。[DNSSEC 委任状態検証ツール](https://www.on-link.jp/dnssec-validator/) で、実際に壊れた事例を確認することができます。
 
 このツールは NSD の再読み込みを行いません。`--sign-zone` を指定すると、`ldns-keygen` 形式の鍵ファイルを使って dnspython でゾーン全体を署名します。`RRSIG` を破損するモードと `nsec-*` モードでは、署名後に対象レコードを壊します。`nsec-*` モードでは、指定された ZSK、または `--key-directory` から自動選択した ZSK で変更対象 NSEC/NSEC3 RRset の RRSIG だけを再生成します。必要に応じて署名前、または署名済みのゾーンファイルを用意し、このツールで出力されたゾーンファイルを NSD で読み込ませてください。
 
-なお、本ツールで作成したドメイン名のリストを、[DNSSEC信頼の連鎖確認ページ](https://www.dnssec-check.jp/) で公開しています。
+なお、本ツールで作成したドメイン名のリストを、[DNSSEC 信頼の連鎖確認ページ](https://www.dnssec-check.jp/) で公開しています。
 
 ## 必要環境
 
@@ -55,10 +55,10 @@ uv pip install --python .venv/bin/python -r requirements.txt
 | `success` | 親または子 | 変更せず出力 | 成功パターン |
 | `ds-keytag-mismatch` | 親 | 委任先 `DS` の Key Tag を1増やす | Key Tag ミスマッチ |
 | `ds-hash-mismatch` | 親 | 委任先 `DS` の Digest の末尾 1バイトを反転する | ハッシュ値ミスマッチ |
-| `ds-rrsig-corrupt` | 親 | 委任先 `DS` の電子署名データである `RRSIG` の署名値を破損する | DSリソースレコードの検証失敗 |
-| `dnskey-rrsig-corrupt` | 子 | ゾーンの頂点の `DNSKEY` の電子署名データである `RRSIG` の署名値を破損する | DNSKEYリソースレコードの検証失敗 |
-| `dnskey-rrsig-expired` | 子 | ゾーンの頂点の `DNSKEY` の電子署名データである `RRSIG` の有効期限を `2010-01-01T00:00:00Z` にする | DNSKEYリソースレコードの検証失敗（有効期限切れ） |
-| `a-rrsig-corrupt` | 子 | 指定名の `A` の電子署名データである `RRSIG` の署名値を破損する | Aリソースレコードの検証失敗 |
+| `ds-rrsig-corrupt` | 親 | 委任先 `DS` の電子署名データである `RRSIG` の署名値を破損する | DS リソースレコードの検証失敗 |
+| `dnskey-rrsig-corrupt` | 子 | ゾーンの頂点の `DNSKEY` の電子署名データである `RRSIG` の署名値を破損する | DNSKEY リソースレコードの検証失敗 |
+| `dnskey-rrsig-expired` | 子 | ゾーンの頂点の `DNSKEY` の電子署名データである `RRSIG` の有効期限を `2010-01-01T00:00:00Z` にする | DNSKEY リソースレコードの検証失敗（有効期限切れ） |
+| `a-rrsig-corrupt` | 子 | 指定名の `A` の電子署名データである `RRSIG` の署名値を破損する | A リソースレコードの検証失敗 |
 | `nsec-cover-mismatch` | 子 | 指定名を覆う NSEC の Next Domain Name を所有者名にして、指定名をカバーしない状態にする | 不在証明のカバー不成立 |
 | `nsec3-cover-mismatch` | 子 | 指定名を覆う NSEC3 の Next Hashed Owner Name を所有者ハッシュにして、指定名をカバーしない状態にする | 不在証明のカバー不成立 |
 | `nsec3-optout-cover-mismatch` | 子 | 指定名を覆う Opt-Out フラグ付き NSEC3 だけを対象に、カバー範囲を壊す | Opt-Out 不在証明のカバー不成立 |
