@@ -38,6 +38,7 @@ MODES = {
     "ds-rrsig-corrupt": "親ゾーン: DS を覆う RRSIG を破損させる",
     "dnskey-rrsig-corrupt": "子ゾーン: DNSKEY を覆う RRSIG を破損させる",
     "dnskey-rrsig-expired": "子ゾーン: DNSKEY を覆う RRSIG を期限切れにする",
+    "a-rrsig-corrupt": "子ゾーン: 指定名の A を覆う RRSIG を破損させる",
     "nsec-cover-mismatch": "子ゾーン: 指定名を覆う NSEC のカバー範囲を壊す",
     "nsec3-cover-mismatch": "子ゾーン: 指定名を覆う NSEC3 のカバー範囲を壊す",
     "nsec3-optout-cover-mismatch": "子ゾーン: Opt-Out NSEC3 のカバー範囲を壊す",
@@ -49,6 +50,7 @@ POST_SIGN_MODES = {
     "ds-rrsig-corrupt",
     "dnskey-rrsig-corrupt",
     "dnskey-rrsig-expired",
+    "a-rrsig-corrupt",
     "nsec-cover-mismatch",
     "nsec3-cover-mismatch",
     "nsec3-optout-cover-mismatch",
@@ -751,6 +753,14 @@ def modify_child_zone(
             zone, zone.origin, dns.rdatatype.RRSIG,
             lambda rdata: rrsig_covers(rdata, dns.rdatatype.DNSKEY), alter_rrsig_signature,
         )
+    if mode == "a-rrsig-corrupt":
+        if target_name is None:
+            raise ValueError("対象名がありません")
+        owner = make_absolute_name(target_name, zone.origin)
+        return replace_matching_rdatas(
+            zone, owner, dns.rdatatype.RRSIG,
+            lambda rdata: rrsig_covers(rdata, dns.rdatatype.A), alter_rrsig_signature,
+        )
     return replace_matching_rdatas(
         zone, zone.origin, dns.rdatatype.RRSIG,
         lambda rdata: rrsig_covers(rdata, dns.rdatatype.DNSKEY), expire_rrsig,
@@ -824,8 +834,8 @@ def modify_zone_for_mode(
         if not target_name:
             raise ValueError("--mode の ds-* では --target-name が必要です")
         return modify_parent_zone(zone, mode, target_name)
-    if mode.startswith("nsec") and not target_name:
-        raise ValueError("--mode の nsec-* では --target-name が必要です")
+    if (mode.startswith("nsec") or mode == "a-rrsig-corrupt") and not target_name:
+        raise ValueError("--mode の nsec-* と a-rrsig-corrupt では --target-name が必要です")
     return modify_child_zone(zone, mode, target_name, target_type)
 
 

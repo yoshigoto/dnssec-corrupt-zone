@@ -125,6 +125,37 @@ class CorruptZoneTests(unittest.TestCase):
         rrsig = self._rdata_at(zone, "@", dns.rdatatype.RRSIG)
         self.assertEqual(getattr(rrsig, "expiration"), corrupt_zone.EXPIRED_AT)
 
+    def test_a_rrsig_corrupt(self) -> None:
+        zone = dns.zone.from_text(
+            "www 300 IN RRSIG A 8 3 300 20300101000000 20200101000000 1234 example. AQID\n"
+            "www 300 IN RRSIG AAAA 8 3 300 20300101000000 20200101000000 1234 example. BAUG",
+            origin=ORIGIN,
+            relativize=True,
+            check_origin=False,
+        )
+        original_signature = getattr(
+            self._rdata_at(zone, "www", dns.rdatatype.RRSIG), "signature"
+        )
+
+        self.assertEqual(
+            corrupt_zone.modify_child_zone(
+                zone, "a-rrsig-corrupt", "www.example.", dns.rdatatype.A
+            ),
+            1,
+        )
+
+        rrsigs = {
+            rrsig.type_covered: rrsig
+            for rdataset in zone.nodes[dns.name.from_text("www", None)].rdatasets
+            if rdataset.rdtype == dns.rdatatype.RRSIG
+            for rrsig in rdataset
+        }
+        self.assertEqual(
+            getattr(rrsigs[dns.rdatatype.A], "signature"),
+            corrupt_zone.change_last_byte(original_signature),
+        )
+        self.assertEqual(getattr(rrsigs[dns.rdatatype.AAAA], "signature"), b"\x04\x05\x06")
+
     def test_increment_zone_soa_serial(self) -> None:
         zone = dns.zone.from_text(
             "@ 300 IN SOA ns.example. hostmaster.example. 4294967295 3600 600 86400 300",
