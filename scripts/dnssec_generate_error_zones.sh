@@ -36,13 +36,13 @@ sh "$script_dir/dnssec_corrupt_parent_zone.sh" "$base_zone_file.signed" ds-rrsig
 printf '\n%s\n' "Create corrupted NSEC and NSEC3 cases."
 sh "$script_dir/dnssec_nsec_corrupt_zone.sh" \
 	"cover.mismatch.nsec.rsasha256.$base_zone_file" nsec-cover-mismatch \
-	"$zone_origin" "$key_directory" .
+	"cover.mismatch.nsec.rsasha256.$zone_origin" "$key_directory" .
 sh "$script_dir/dnssec_nsec_corrupt_zone.sh" \
 	"cover.mismatch.nsec3.rsasha256.$base_zone_file" nsec3-cover-mismatch \
-	"$zone_origin" "$key_directory" .
+	"cover.mismatch.nsec3.rsasha256.$zone_origin" "$key_directory" .
 sh "$script_dir/dnssec_nsec_corrupt_zone.sh" \
 	"type.mismatch.nsec3.rsasha256.$base_zone_file" nsec3-type-bitmap-mismatch \
-	"$zone_origin" "$key_directory" .
+	"type.mismatch.nsec3.rsasha256.$zone_origin" "$key_directory" .
 sh "$script_dir/dnssec_nsec_corrupt_zone.sh" \
 	"type.mismatch.nsec.rsasha256.$base_zone_file" nsec-type-bitmap-mismatch \
-	"$zone_origin" "$key_directory" .
+	"type.mismatch.nsec.rsasha256.$zone_origin" "$key_directory" .

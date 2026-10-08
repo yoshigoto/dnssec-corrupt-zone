@@ -7,7 +7,6 @@ if [ "$#" -lt 1 ] || [ -z "$1" ]; then
 fi
 
 base_zone_name=$1
-zone_origin=${base_zone_name%.zone}
 template_file="template.$base_zone_name"
 
 if [ ! -f "$template_file" ]; then
@@ -23,6 +22,7 @@ signing_algorithms="rsasha256 ecdsap256sha256 ed25519 ed448"
 
 for algorithm in $signing_algorithms; do
 	zone_file="sign.dnskey.error.$algorithm.$base_zone_name"
+	zone_origin=${zone_file%.zone}
 	printf 'Target: %s / %s\n' "$zone_file" "$zone_origin"
 	"$python" "$project_dir/corrupt_zone.py" \
 		-i "$zone_file" -o "$zone_file.signed" \
@@ -30,6 +30,7 @@ for algorithm in $signing_algorithms; do
 		--sign-zone --key-directory "$key_directory"
 
 	zone_file="expire.dnskey.error.$algorithm.$base_zone_name"
+	zone_origin=${zone_file%.zone}
 	printf 'Target: %s / %s\n' "$zone_file" "$zone_origin"
 	"$python" "$project_dir/corrupt_zone.py" \
 		-i "$zone_file" -o "$zone_file.signed" \
@@ -37,6 +38,7 @@ for algorithm in $signing_algorithms; do
 		--sign-zone --key-directory "$key_directory"
 
 	zone_file="sign.a.error.$algorithm.$base_zone_name"
+	zone_origin=${zone_file%.zone}
 	printf 'Target: %s / %s\n' "$zone_file" "$zone_origin"
 	"$python" "$project_dir/corrupt_zone.py" \
 		-i "$zone_file" -o "$zone_file.signed" \

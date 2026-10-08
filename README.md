@@ -165,6 +165,14 @@ PYTHON=.venv/bin/python DNSSEC_KEY_DIR=../keys \
 
 `PYTHON` は Python 実行ファイル、`DNSSEC_KEY_DIR` は鍵ディレクトリを指定します。未指定の場合、Python は `python3`、鍵ディレクトリはカレントディレクトリから見た `../keys` です。ファイルの入出力先はカレントディレクトリを基準にし、スクリプト本体と `corrupt_zone.py` はスクリプトの配置場所を基準に検索します。個別の署名スクリプトでは `DNSSEC_ZONE_DIR` でゾーンディレクトリも指定できます。署名スクリプトの実行には `ldns-signzone` が PATH 上に必要です。
 
+子ゾーンの origin は、各子ゾーンのファイル名から末尾の `.zone` を除いたドメイン名です。例えば `sign.dnskey.error.ed25519.example.test.zone` は `sign.dnskey.error.ed25519.example.test` として署名・加工し、この子ドメインの鍵を使用します。ベースゾーン名 `example.test` を使うのは親ゾーンの処理だけです。
+
+補助スクリプトの引数と鍵選択は、次の回帰テストで確認できます。このテストは外部コマンドをスタブに置き換え、実際の暗号署名は行いません。
+
+```sh
+python3 -m unittest -v test_shell_scripts.py
+```
+
 ## NSD への反映
 
 各出力ファイルを NSD の `zonefile:` に指定し、変更後は `nsd-checkconf` で設定とゾーンを確認し、NSD を再読み込みします。実際のコマンドは NSD の導入方法・権限設定に合わせてください。
