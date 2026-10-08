@@ -174,22 +174,28 @@ zone:
 
 ## 親ゾーンの更新について
 
-親ゾーンについては、未署名の親ゾーンを入力し、`--sign-zone` と `--key-directory` を指定することで、個別に事象を発生させることができます。`ds-keytag-mismatch` と `ds-hash-mismatch` は DS を変更してから署名し、`ds-rrsig-corrupt` は署名後に `RRSIG DS` を壊します。
+親ゾーンは、通常利用している署名手順で署名する場合、まず未署名のゾーンに対して `--sign-zone` を付けずに `ds-keytag-mismatch` や `ds-hash-mismatch` を実行し、DS を加工します。必要な加工をすべて終えてから親ゾーンを署名してください。こうすることで、加工後の DS に対する署名が作成されます。
 
-複数のドメイン名を同じ親ゾーンで壊す場合は、最初の実行で署名と1件目の加工を行い、その出力を次の実行の `-i` に指定します。2件目以降は、すでに署名済みのゾーンを再署名せずに加工を重ねるため、`--sign-zone` を指定しません。最後の実行で指定した `-o` のファイルを NSD の `zonefile:` に設定してください。途中のファイルは作業用なので、不要になれば削除できます。以下の例では、NSD に読み込ませるファイルは最後の `example.test.zone.signed` です。
+`ds-rrsig-corrupt` は署名済みゾーンに対して実行し、親ゾーンの `RRSIG DS` を壊します。この処理の後に親ゾーンを再署名すると破損した署名が修復されてしまうため、再署名しないでください。`--sign-zone` を使ってツール内で署名する方法もありますが、通常の署名手順を使う場合は次のように実行します。
 
 ```bash
-# 1件目: 未署名の元ファイルから署名して加工
-.venv/bin/python corrupt_zone.py -i example.test.zone -o example.test.zone.work1 -m ds-keytag-mismatch -d example.test. -t keytag.ds.error.example.test. -k /path/to/keys --sign-zone
+# 1件目: 未署名ゾーンの DS Key Tag を加工
+.venv/bin/python corrupt_zone.py -i example.test.zone -o example.test.zone.work1 -m ds-keytag-mismatch -d example.test. -t keytag.ds.error.example.test.
 
-# 2件目: 1件目の出力に加工を重ねる
-.venv/bin/python corrupt_zone.py -i example.test.zone.work1 -o example.test.zone.signed -m ds-hash-mismatch -d example.test. -t hash.ds.error.example.test.
+# 2件目: 同じ未署名ゾーンに別の DS 加工を重ねる
+.venv/bin/python corrupt_zone.py -i example.test.zone.work1 -o example.test.zone.work2 -m ds-hash-mismatch -d example.test. -t hash.ds.error.example.test.
+
+# example.test.zone.work2 を通常の署名手順で署名し、example.test.zone.signed を作成
+# 署名済みゾーンの DS RRSIG を加工
+.venv/bin/python corrupt_zone.py -i example.test.zone.signed -o example.test.zone.final -m ds-rrsig-corrupt -d example.test. -t sign.ds.error.example.test.
 ```
 
-各検証ケースを独立したゾーンファイルにする場合は、毎回、正常な元ファイルを `-i` に指定し、ケースごとに異なる `-o` を指定してください。その場合は各コマンドに `--sign-zone` を付けます。
+上の例で、NSD に読み込ませるファイルは最後の `example.test.zone.final` です。中間ファイルは作業用なので、不要になれば削除できます。
+
+各検証ケースを独立したゾーンファイルにする場合は、ケースごとに正常な未署名ゾーンから作業を始め、DS の加工後にそれぞれ通常の手順で署名してください。`ds-rrsig-corrupt` のケースでは、署名済みファイルを入力にして最後に RRSIG を加工します。署名処理の具体的なコマンドは、環境で使用している署名方法に合わせてください。
 
 1. example.test.zone を編集
-1. `.venv/bin/python corrupt_zone.py -i example.test.zone -o example.test.ds-keytag.zone.signed -m ds-keytag-mismatch -d example.test. -t keytag.ds.error.example.test. -k /path/to/keys --sign-zone`
-1. `.venv/bin/python corrupt_zone.py -i example.test.zone -o example.test.ds-hash.zone.signed -m ds-hash-mismatch -d example.test. -t hash.ds.error.example.test. -k /path/to/keys --sign-zone`
-1. `.venv/bin/python corrupt_zone.py -i example.test.zone -o example.test.ds-rrsig.zone.signed -m ds-rrsig-corrupt -d example.test. -t sign.ds.error.example.test. -k /path/to/keys --sign-zone`
+1. `.venv/bin/python corrupt_zone.py -i example.test.zone -o example.test.ds-keytag.zone -m ds-keytag-mismatch -d example.test. -t keytag.ds.error.example.test.`
+1. `example.test.ds-keytag.zone` を通常の署名手順で署名
+1. `ds-rrsig-corrupt` のケースでは、署名済みファイルを入力として `.venv/bin/python corrupt_zone.py -i example.test.ds-keytag.zone.signed -o example.test.ds-rrsig.zone.signed -m ds-rrsig-corrupt -d example.test. -t sign.ds.error.example.test.` を実行
 1. 権威サーバーでゾーンファイルを再読み込み
