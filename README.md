@@ -154,6 +154,17 @@ NSEC/NSEC3 のカバー範囲、NODATA 型ビットマップ、NSEC3 Opt-Out の
 .venv/bin/python -m unittest -v test_corrupt_zone.py
 ```
 
+## 補助シェルスクリプト
+
+`scripts/` には FreeBSD `/bin/sh` を含む POSIX `sh` 向けの補助スクリプトがあります。ゾーンファイルとテンプレートがあるディレクトリをカレントディレクトリにして、次のように実行します。
+
+```sh
+PYTHON=.venv/bin/python DNSSEC_KEY_DIR=../keys \
+  sh /path/to/dnssec-corrupt-zone/scripts/dnssec_generate_error_zones.sh example.test.zone
+```
+
+`PYTHON` は Python 実行ファイル、`DNSSEC_KEY_DIR` は鍵ディレクトリを指定します。未指定の場合、Python は `python3`、鍵ディレクトリはカレントディレクトリから見た `../keys` です。ファイルの入出力先はカレントディレクトリを基準にし、スクリプト本体と `corrupt_zone.py` はスクリプトの配置場所を基準に検索します。個別の署名スクリプトでは `DNSSEC_ZONE_DIR` でゾーンディレクトリも指定できます。署名スクリプトの実行には `ldns-signzone` が PATH 上に必要です。
+
 ## NSD への反映
 
 各出力ファイルを NSD の `zonefile:` に指定し、変更後は `nsd-checkconf` で設定とゾーンを確認し、NSD を再読み込みします。実際のコマンドは NSD の導入方法・権限設定に合わせてください。
