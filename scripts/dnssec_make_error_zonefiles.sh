@@ -18,7 +18,7 @@ signing_algorithms="rsasha256 ecdsap256sha256 ed25519 ed448"
 for algorithm in $signing_algorithms; do
 	success_file="success.$algorithm.$base_zone_file"
 	printf 'Creating %s\n' "$success_file"
-	sed "s/algorithm/$algorithm/" "$template_file" > "$success_file"
+	sed "s/algorithm/$algorithm/g" "$template_file" > "$success_file"
 	sed 's/success/keytag.ds.error/g' "$success_file" > "keytag.ds.error.$algorithm.$base_zone_file"
 	sed 's/success/hash.ds.error/g' "$success_file" > "hash.ds.error.$algorithm.$base_zone_file"
 	sed 's/success/sign.ds.error/g' "$success_file" > "sign.ds.error.$algorithm.$base_zone_file"

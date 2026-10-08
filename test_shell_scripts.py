@@ -139,6 +139,21 @@ else:
         self.assertEqual(len(commands), 33)
         self.assert_signing_keys(commands)
 
+    def test_make_error_zonefiles_replaces_all_algorithm_occurrences(self) -> None:
+        (self.work_directory / f"template.algorithm.{BASE_ZONE_FILE}").write_text(
+            "success.algorithm.example.test.\n"
+            "ns.success.algorithm.example.test.\n"
+        )
+
+        self.run_script("dnssec_make_error_zonefiles.sh", BASE_ZONE_FILE)
+
+        for algorithm in ("rsasha256", "ecdsap256sha256", "ed25519", "ed448"):
+            zone_file = self.work_directory / f"success.{algorithm}.{BASE_ZONE_FILE}"
+            contents = zone_file.read_text()
+            self.assertIn(f"success.{algorithm}.example.test.", contents)
+            self.assertIn(f"ns.success.{algorithm}.example.test.", contents)
+            self.assertNotIn("algorithm", contents)
+
     def test_generate_error_zones_preserves_parent_and_child_origins(self) -> None:
         self.prepare_child_zones()
         self.run_script("dnssec_generate_error_zones.sh", BASE_ZONE_FILE)

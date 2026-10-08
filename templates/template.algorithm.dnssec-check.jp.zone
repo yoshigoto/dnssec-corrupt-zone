@@ -1,0 +1,31 @@
+$TTL	2m	; TTL for this zone
+success.algorithm.dnssec-check.jp.	IN	SOA	ns.dnssec-check.jp.	root.dnssec-check.jp. (
+				0000000001	; Serial
+				2h		; Refresh (Primary zone check interval)
+				1h		; Retry (Primary zone check retry)
+				1w		; Expire (Expire time for Primary zone)
+				1h )		; Minimum (TTL for Negative Cache)
+		IN	NS	ns.success.algorithm.dnssec-check.jp.
+		IN	NS	ns2.success.algorithm.dnssec-check.jp.
+		IN	MX	0 .		; This record explicitly states that emails will not be received for the domain name in which the record is set.
+;
+; SPF (Treat all Emails from any source IP address as malicious.)
+;
+		IN	TXT	"v=spf1 -all"
+;
+; Resource Record
+;
+localhost	IN	CNAME	localhost.
+;
+ns		IN	A	160.16.209.55
+		IN	AAAA	2001:e42:102:1806:160:16:209:55
+ns2		IN	A	160.16.207.148
+		IN	AAAA	2001:e42:102:1805:160:16:207:148
+www		IN	A	160.16.207.148
+		IN	AAAA	2001:e42:102:1805:160:16:207:148
+a		IN	A	160.16.207.148
+aaaa		IN	AAAA	2001:e42:102:1805:160:16:207:148
+corrupted	IN	A	160.16.207.148
+target		IN	AAAA	2001:e42:102:1805:160:16:207:148
+;
+; EOF
