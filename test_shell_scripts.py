@@ -17,6 +17,8 @@ class ShellScriptTests(unittest.TestCase):
         self.temporary_directory = TemporaryDirectory(prefix="dnssec scripts ")
         self.addCleanup(self.temporary_directory.cleanup)
         self.work_directory = Path(self.temporary_directory.name)
+        self.template_directory = self.work_directory / "templates"
+        self.template_directory.mkdir()
         self.key_directory = self.work_directory / "keys"
         self.key_directory.mkdir()
         self.command_directory = self.work_directory / "bin"
@@ -60,7 +62,7 @@ else:
             "DNSSEC_KEY_DIR": str(self.key_directory),
             "COMMAND_LOG": str(self.log_file),
         }
-        (self.work_directory / f"template.{BASE_ZONE_FILE}").write_text(
+        (self.template_directory / f"template.{BASE_ZONE_FILE}").write_text(
             f"$ORIGIN {PARENT_ORIGIN}.\n"
             "$TTL 300\n"
             "@ IN SOA ns.example.test. hostmaster.example.test. "
@@ -69,14 +71,16 @@ else:
             "success.rsasha256 IN NS ns.example.test.\n"
             "; EOF\n"
         )
-        (self.work_directory / f"template.algorithm.{BASE_ZONE_FILE}").write_text(
+        (self.template_directory / f"template.algorithm.{BASE_ZONE_FILE}").write_text(
             "success.algorithm.example.test.\n"
         )
 
-    def run_script(self, name: str, *arguments: str) -> None:
+    def run_script(
+        self, name: str, *arguments: str, cwd: Path | None = None
+    ) -> None:
         result = subprocess.run(
             ["sh", str(SCRIPTS / name), *arguments],
-            cwd=self.work_directory,
+            cwd=cwd or self.work_directory,
             env=self.environment,
             capture_output=True,
             text=True,
@@ -99,7 +103,12 @@ else:
                 )
 
     def prepare_child_zones(self) -> None:
-        self.run_script("dnssec_make_error_zonefiles.sh", BASE_ZONE_FILE)
+        self.run_script(
+            "dnssec_make_error_zonefiles.sh",
+            BASE_ZONE_FILE,
+            "--template-dir",
+            str(self.template_directory),
+        )
         for zone_file in self.work_directory.glob(f"*.{BASE_ZONE_FILE}"):
             if not zone_file.name.startswith("template."):
                 self.add_keys(zone_file.name.removesuffix(".zone"))
@@ -139,7 +148,11 @@ else:
 
     def test_corrupt_child_zone_passes_each_child_origin(self) -> None:
         self.prepare_child_zones()
-        self.run_script("dnssec_corrupt_child_zone.sh", BASE_ZONE_FILE)
+        self.run_script(
+            "dnssec_corrupt_child_zone.sh",
+            BASE_ZONE_FILE,
+            str(self.template_directory),
+        )
         commands = self.commands()
         self.assertEqual(len(commands), 12)
         self.assert_python_origins(commands)
@@ -156,15 +169,23 @@ else:
         self.assert_signing_keys(commands)
 
     def test_make_error_zonefiles_replaces_all_algorithm_occurrences(self) -> None:
-        (self.work_directory / f"template.algorithm.{BASE_ZONE_FILE}").write_text(
+        (self.template_directory / f"template.algorithm.{BASE_ZONE_FILE}").write_text(
             "success.algorithm.example.test.\n"
             "ns.success.algorithm.example.test.\n"
         )
 
-        self.run_script("dnssec_make_error_zonefiles.sh", BASE_ZONE_FILE)
+        output_directory = self.work_directory / "generated zones"
+        self.run_script(
+            "dnssec_make_error_zonefiles.sh",
+            BASE_ZONE_FILE,
+            "--template-dir",
+            str(self.template_directory),
+            "--output-dir",
+            str(output_directory),
+        )
 
         for algorithm in ("rsasha256", "ecdsap256sha256", "ed25519", "ed448"):
-            zone_file = self.work_directory / f"success.{algorithm}.{BASE_ZONE_FILE}"
+            zone_file = output_directory / f"success.{algorithm}.{BASE_ZONE_FILE}"
             contents = zone_file.read_text()
             self.assertIn(f"success.{algorithm}.example.test.", contents)
             self.assertIn(f"ns.success.{algorithm}.example.test.", contents)
@@ -230,7 +251,17 @@ else:
 
     def test_generate_error_zones_preserves_parent_and_child_origins(self) -> None:
         self.prepare_child_zones()
-        self.run_script("dnssec_generate_error_zones.sh", BASE_ZONE_FILE)
+        caller_directory = self.work_directory / "caller"
+        caller_directory.mkdir()
+        self.run_script(
+            "dnssec_generate_error_zones.sh",
+            BASE_ZONE_FILE,
+            "--template-dir",
+            str(self.template_directory),
+            "--output-dir",
+            str(self.work_directory),
+            cwd=caller_directory,
+        )
         parent_zone = self.work_directory / BASE_ZONE_FILE
         parent_contents = parent_zone.read_text()
         self.assertIn(
