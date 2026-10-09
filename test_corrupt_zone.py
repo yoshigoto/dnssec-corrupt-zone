@@ -158,18 +158,43 @@ class CorruptZoneTests(unittest.TestCase):
         )
         self.assertEqual(getattr(rrsigs[dns.rdatatype.AAAA], "signature"), b"\x04\x05\x06")
 
-    def test_increment_zone_soa_serial(self) -> None:
+    def test_main_success_preserves_soa_serial_and_signature(self) -> None:
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        dnskey = dns.dnssec.make_dnskey(private_key.public_key(), 13, flags=256)
         zone = dns.zone.from_text(
-            "@ 300 IN SOA ns.example. hostmaster.example. 4294967295 3600 600 86400 300",
+            "@ 300 IN SOA ns.example. hostmaster.example. 4294967295 3600 600 86400 300\n"
+            "@ 300 IN NS ns.example.\n"
+            f"@ 300 IN DNSKEY {dnskey.to_text()}",
             origin=ORIGIN,
-            relativize=True,
-            check_origin=False,
+            relativize=False,
         )
-
-        self.assertEqual(corrupt_zone.increment_zone_soa(zone), 1)
-
-        soa = self._rdata_at(zone, "@", dns.rdatatype.SOA)
-        self.assertEqual(getattr(soa, "serial"), 0)
+        soa = zone.get_rdataset(ORIGIN, dns.rdatatype.SOA)
+        signature = dns.dnssec.sign(
+            (ORIGIN, soa), private_key, ORIGIN, dnskey, lifetime=300, origin=ORIGIN,
+        )
+        corrupt_zone.add_rdataset(zone, ORIGIN, dns.rdatatype.RRSIG, signature, ttl=300)
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "example.zone.signed"
+            output = Path(directory) / "example.success.zone.signed"
+            corrupt_zone.save_zone(zone, source)
+            with patch("sys.argv", [
+                "corrupt_zone.py", "-i", str(source), "-o", str(output),
+                "-d", "example.", "-m", "success",
+            ]):
+                corrupt_zone.main()
+            result = dns.zone.from_file(str(output), origin=ORIGIN, relativize=False)
+        result_soa = result.get_rdataset(ORIGIN, dns.rdatatype.SOA)
+        result_signatures = result.get_rdataset(
+            ORIGIN, dns.rdatatype.RRSIG, dns.rdatatype.SOA
+        )
+        self.assertEqual(result_soa, soa)
+        self.assertEqual(result_soa[0].serial, 4294967295)
+        self.assertEqual(result_signatures[0], signature)
+        dns.dnssec.validate(
+            (ORIGIN, result_soa), (ORIGIN, result_signatures),
+            {ORIGIN: result.get_rdataset(ORIGIN, dns.rdatatype.DNSKEY)},
+            origin=ORIGIN,
+        )
 
     def test_name_is_covered_handles_circular_intervals(self) -> None:
         cases = [

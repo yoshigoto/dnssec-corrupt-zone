@@ -95,12 +95,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="加工後のゾーン全体を dnspython で署名する",
     )
-    parser.add_argument(
-        "-s",
-        "--increment-serial",
-        action="store_true",
-        help="SOA レコードの Serial をインクリメントする",
-    )
     return parser.parse_args()
 
 
@@ -172,21 +166,6 @@ def alter_rrsig_signature(rdata: dns.rdata.Rdata) -> dns.rdata.Rdata:
 
 def expire_rrsig(rdata: dns.rdata.Rdata) -> dns.rdata.Rdata:
     return rdata.replace(expiration=EXPIRED_AT)
-
-
-def increment_soa_serial(rdata: dns.rdata.Rdata) -> dns.rdata.Rdata:
-    serial = getattr(rdata, "serial", None)
-    if not isinstance(serial, int):
-        raise TypeError("SOA レコードではありません")
-    return rdata.replace(serial=(serial + 1) % (2**32))
-
-
-def increment_zone_soa(zone: dns.zone.Zone) -> int:
-    if zone.origin is None:
-        raise ValueError("ゾーンオリジンがありません")
-    return replace_matching_rdatas(
-        zone, zone.origin, dns.rdatatype.SOA, lambda _rdata: True, increment_soa_serial,
-    )
 
 
 def name_is_covered(
@@ -1003,13 +982,6 @@ def main() -> None:
 
     if args.mode != "success" and not post_sign_modify and not changed:
         raise SystemExit(f"対象レコードが見つかりませんでした: {MODES[args.mode]}")
-
-    if args.increment_serial:
-        soa_changed = increment_zone_soa(zone)
-        if not soa_changed:
-            print("警告: SOA レコードが見つかりませんでした")
-        else:
-            print("SOA Serial をインクリメントしました")
 
     if args.sign_zone:
         if args.key_directory is None:
