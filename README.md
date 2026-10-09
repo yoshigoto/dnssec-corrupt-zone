@@ -165,6 +165,8 @@ PYTHON=.venv/bin/python DNSSEC_KEY_DIR=../keys \
 
 `PYTHON` は Python 実行ファイル、`DNSSEC_KEY_DIR` は鍵ディレクトリを指定します。未指定の場合、Python は `python3`、鍵ディレクトリはカレントディレクトリから見た `../keys` です。ファイルの入出力先はカレントディレクトリを基準にし、スクリプト本体と `corrupt_zone.py` はスクリプトの配置場所を基準に検索します。個別の署名スクリプトでは `DNSSEC_ZONE_DIR` でゾーンディレクトリも指定できます。署名スクリプトの実行には `ldns-signzone` が PATH 上に必要です。
 
+ゾーン生成スクリプトは、親ゾーンテンプレートをコピーした後、親ゾーンの各子ゾーン委任に対応する `K<child-zone>.+*.ds` ファイルを `DNSSEC_KEY_DIR` から探し、DS レコードを追加します。DS ファイルは `ldns-key2ds` のゾーン形式出力を保存したもの（例: `ldns-key2ds Kchild.example.+008+12345.key > Kchild.example.+008+12345.ds`）を使います。委任先の DS ファイルがない、内容が DS レコードでない、または owner 名が委任先と異なる場合はエラー終了します。鍵ロールオーバーで複数の DS ファイルがある場合はすべて追加し、既に同じ DS がある場合は重複させません。
+
 子ゾーンの origin は、各子ゾーンのファイル名から末尾の `.zone` を除いたドメイン名です。例えば `sign.dnskey.error.ed25519.example.test.zone` は `sign.dnskey.error.ed25519.example.test` として署名・加工し、この子ドメインの鍵を使用します。ベースゾーン名 `example.test` を使うのは親ゾーンの処理だけです。
 
 補助スクリプトの引数と鍵選択は、次の回帰テストで確認できます。このテストは外部コマンドをスタブに置き換え、実際の暗号署名は行いません。

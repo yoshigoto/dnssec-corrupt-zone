@@ -34,6 +34,8 @@ command = Path(sys.argv[0]).name
 with open(os.environ["COMMAND_LOG"], "a") as log:
     log.write(json.dumps([command, arguments]) + "\\n")
 if command == "python-stub":
+    if arguments[0].endswith("dnssec_add_ds_records.py"):
+        os.execv(sys.executable, [sys.executable, *arguments])
     shutil.copyfile(arguments[arguments.index("-i") + 1],
                     arguments[arguments.index("-o") + 1])
 else:
@@ -58,7 +60,15 @@ else:
             "DNSSEC_KEY_DIR": str(self.key_directory),
             "COMMAND_LOG": str(self.log_file),
         }
-        (self.work_directory / f"template.{BASE_ZONE_FILE}").write_text("parent\n")
+        (self.work_directory / f"template.{BASE_ZONE_FILE}").write_text(
+            f"$ORIGIN {PARENT_ORIGIN}.\n"
+            "$TTL 300\n"
+            "@ IN SOA ns.example.test. hostmaster.example.test. "
+            "(1 2h 1h 1w 1h)\n"
+            "@ IN NS ns.example.test.\n"
+            "success.rsasha256 IN NS ns.example.test.\n"
+            "; EOF\n"
+        )
         (self.work_directory / f"template.algorithm.{BASE_ZONE_FILE}").write_text(
             "success.algorithm.example.test.\n"
         )
@@ -83,6 +93,10 @@ else:
                 f"{origin}. IN DNSKEY {flags} 3 8 AQID\n"
             )
             Path(f"{key_base}.private").write_text("test stub key\n")
+            if flags == 257:
+                Path(f"{key_base}.ds").write_text(
+                    f"{origin}. IN DS {int(tag)} 8 2 {'00' * 32}\n"
+                )
 
     def prepare_child_zones(self) -> None:
         self.run_script("dnssec_make_error_zonefiles.sh", BASE_ZONE_FILE)
@@ -94,6 +108,8 @@ else:
     def assert_python_origins(self, commands: list) -> None:
         for command, arguments in commands:
             if command != "python-stub":
+                continue
+            if arguments[0].endswith("dnssec_add_ds_records.py"):
                 continue
             source = Path(arguments[arguments.index("-i") + 1])
             expected_origin = source.name.removesuffix(".signed").removesuffix(".zone")
@@ -154,11 +170,76 @@ else:
             self.assertIn(f"ns.success.{algorithm}.example.test.", contents)
             self.assertNotIn("algorithm", contents)
 
+    def test_add_ds_records_requires_ds_file_for_each_delegation(self) -> None:
+        zone_file = self.work_directory / BASE_ZONE_FILE
+        zone_file.write_text(
+            f"$ORIGIN {PARENT_ORIGIN}.\n"
+            "$TTL 300\n"
+            "@ IN SOA ns.example.test. hostmaster.example.test. "
+            "(1 2h 1h 1w 1h)\n"
+            "success.rsasha256 IN NS ns.example.test.\n"
+            "; EOF\n"
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "dnssec_add_ds_records.py"),
+                str(zone_file),
+                PARENT_ORIGIN,
+                str(self.key_directory),
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No DS files found", result.stderr)
+        self.assertNotIn(" IN DS ", zone_file.read_text())
+
+    def test_add_ds_records_is_idempotent(self) -> None:
+        child_origin = f"success.rsasha256.{PARENT_ORIGIN}"
+        zone_file = self.work_directory / BASE_ZONE_FILE
+        zone_file.write_text(
+            f"$ORIGIN {PARENT_ORIGIN}.\n"
+            "$TTL 300\n"
+            "@ IN SOA ns.example.test. hostmaster.example.test. "
+            "(1 2h 1h 1w 1h)\n"
+            "success.rsasha256 IN NS ns.example.test.\n"
+            "; EOF\n"
+        )
+        (self.key_directory / f"K{child_origin}.+008+00001.ds").write_text(
+            f"{child_origin}. IN DS 1 8 2 {'00' * 32}\n"
+        )
+        command = [
+            sys.executable,
+            str(SCRIPTS / "dnssec_add_ds_records.py"),
+            str(zone_file),
+            PARENT_ORIGIN,
+            str(self.key_directory),
+        ]
+
+        first_run = subprocess.run(command, capture_output=True, text=True)
+        second_run = subprocess.run(command, capture_output=True, text=True)
+
+        self.assertEqual(first_run.returncode, 0, first_run.stderr)
+        self.assertEqual(second_run.returncode, 0, second_run.stderr)
+        self.assertIn("DS records added: 1", first_run.stdout)
+        self.assertIn("DS records added: 0", second_run.stdout)
+        self.assertEqual(zone_file.read_text().count(" IN DS "), 1)
+
     def test_generate_error_zones_preserves_parent_and_child_origins(self) -> None:
         self.prepare_child_zones()
         self.run_script("dnssec_generate_error_zones.sh", BASE_ZONE_FILE)
+        parent_zone = self.work_directory / BASE_ZONE_FILE
+        parent_contents = parent_zone.read_text()
+        self.assertIn(
+            "success.rsasha256.example.test. 300 IN DS 1 8 2 " + "00" * 32,
+            parent_contents,
+        )
+        self.assertLess(parent_contents.index(" IN DS "), parent_contents.index("; EOF"))
         commands = self.commands()
-        self.assertEqual(len(commands), 66)
+        self.assertEqual(len(commands), 67)
         self.assert_python_origins(commands)
         self.assert_signing_keys(commands)
         for prefix in (
