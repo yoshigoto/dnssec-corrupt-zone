@@ -192,15 +192,16 @@ PYTHON=.venv/bin/python \
 
 `PYTHON` は Python 実行ファイル、`--key-dir DIR` は鍵ディレクトリを指定します。鍵ディレクトリは環境変数 `DNSSEC_KEY_DIR` でも指定でき、`--key-dir` が優先されます。どちらも未指定の場合は、実行時のカレントディレクトリから見た `../keys` です。Python の既定値は `python3` です。スクリプト本体と `corrupt_zone.py` はスクリプトの配置場所を基準に検索します。個別の署名スクリプトでは `DNSSEC_ZONE_DIR` でゾーンディレクトリも指定できます。署名スクリプトの実行には `ldns-signzone` が PATH 上に必要です。
 
-`dnssec_make_error_zonefiles.sh` は NSEC と NSEC3 の型ビットマップ不整合について、A に加えて MX と TXT の問い合わせ型を使うゾーンファイルも生成します。NSEC3 のカバー不成立、型ビットマップ不整合、Opt-Out カバー不成立には、既定の反復 0・salt なしのほか、次の3つのパラメーター組み合わせを持つゾーンも生成します。
+`dnssec_make_error_zonefiles.sh` は NSEC と NSEC3 の型ビットマップ不整合について、A に加えて MX と TXT の問い合わせ型を使うゾーンファイルも生成します。NSEC3 のカバー不成立、型ビットマップ不整合、Opt-Out カバー不成立には、次の4つのパラメーター組み合わせを持つゾーンも生成します。
 
 | ゾーン名の追加部分 | NSEC3 反復回数 | NSEC3 salt |
 | --- | ---: | --- |
+| `iter0.nosalt` | 0 | なし |
 | `iter0.saltA1B2` | 0 | `A1B2` |
 | `iter1.nosalt` | 1 | なし |
 | `iter1.saltA1B2` | 1 | `A1B2` |
 
-例えば `cover.mismatch.nsec3.iter1.saltA1B2.rsasha256.<zone>.zone` は、反復回数 1、salt `A1B2` の NSEC3 ゾーンにカバー不成立を作ります。`dnssec_generate_error_zones.sh` で署名・DS 追加まで行う場合、追加された委任先それぞれについても、通常と同じ形式の `.key`、`.private`、`.ds` ファイルが鍵ディレクトリに必要です。単に未署名のゾーンファイルを作る場合は `dnssec_make_error_zonefiles.sh` を使ってください。
+例えば `cover.mismatch.nsec3.iter1.saltA1B2.rsasha256.<zone>.zone` は、反復回数 1、salt `A1B2` の NSEC3 ゾーンにカバー不成立を作ります。サフィックスのない通常の NSEC3 ゾーンは `ldns-signzone` の既定値（反復回数 1、salt なし）を使います。`dnssec_generate_error_zones.sh` で署名・DS 追加まで行う場合、追加された委任先それぞれについても、通常と同じ形式の `.key`、`.private`、`.ds` ファイルが鍵ディレクトリに必要です。単に未署名のゾーンファイルを作る場合は `dnssec_make_error_zonefiles.sh` を使ってください。
 
 `dnssec_nsec_corrupt_zone.sh` では、`--target-type TYPE` でビットマップに追加する型を、`--nsec3-iterations COUNT` と `--nsec3-salt HEX` で NSEC3 の署名パラメーターを指定できます。salt は偶数桁の16進数です。例えば次の指定は反復回数 1、salt `A1B2` の NSEC3 ゾーンを作ります。
 

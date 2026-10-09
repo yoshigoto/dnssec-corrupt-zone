@@ -100,9 +100,13 @@ type.mx.mismatch.nsec3.rsasha256	IN	NS	ns.dnssec-check.jp.
 					IN	NS	ns2.dnssec-check.jp.
 type.txt.mismatch.nsec3.rsasha256	IN	NS	ns.dnssec-check.jp.
 					IN	NS	ns2.dnssec-check.jp.
-optout.mismatch.nsec3.rsasha256	IN	NS	ns.dnssec-check.jp.
-					IN	NS	ns2.dnssec-check.jp.
 ;
+cover.mismatch.nsec3.iter0.nosalt.rsasha256 IN NS ns.dnssec-check.jp.
+	IN NS ns2.dnssec-check.jp.
+type.mismatch.nsec3.iter0.nosalt.rsasha256 IN NS ns.dnssec-check.jp.
+	IN NS ns2.dnssec-check.jp.
+optout.mismatch.nsec3.iter0.nosalt.rsasha256 IN NS ns.dnssec-check.jp.
+	IN NS ns2.dnssec-check.jp.
 cover.mismatch.nsec3.iter0.saltA1B2.rsasha256 IN NS ns.dnssec-check.jp.
 	IN NS ns2.dnssec-check.jp.
 type.mismatch.nsec3.iter0.saltA1B2.rsasha256 IN NS ns.dnssec-check.jp.

@@ -202,7 +202,7 @@ else:
         self.prepare_child_zones()
         self.run_script("dnssec_sign_child_zones.sh", BASE_ZONE_FILE)
         commands = self.commands()
-        self.assertEqual(len(commands), 46)
+        self.assertEqual(len(commands), 49)
         self.assert_signing_keys(commands)
 
     def test_make_error_zonefiles_replaces_all_algorithm_occurrences(self) -> None:
@@ -232,6 +232,7 @@ else:
             "type.txt.mismatch.nsec.rsasha256",
             "type.mx.mismatch.nsec3.rsasha256",
             "type.txt.mismatch.nsec3.rsasha256",
+            "cover.mismatch.nsec3.iter0.nosalt.rsasha256",
             "cover.mismatch.nsec3.iter0.saltA1B2.rsasha256",
             "type.mismatch.nsec3.iter1.nosalt.rsasha256",
             "optout.mismatch.nsec3.iter1.saltA1B2.rsasha256",
@@ -340,7 +341,7 @@ else:
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-        for iterations, salt in ((0, "A1B2"), (1, None), (1, "A1B2")):
+        for iterations, salt in ((0, None), (0, "A1B2"), (1, None), (1, "A1B2")):
             options = ["--nsec3-iterations", str(iterations)]
             if salt is not None:
                 options.extend(["--nsec3-salt", salt])
@@ -431,7 +432,7 @@ else:
              (covering[0], dns.rdatatype.RRSIG, dns.rdatatype.NSEC3)],
         )
         self.assertIsNone(modified.get_rdataset(target, dns.rdatatype.RRSIG))
-        for iterations, salt in ((0, "A1B2"), (1, None), (1, "A1B2")):
+        for iterations, salt in ((0, None), (0, "A1B2"), (1, None), (1, "A1B2")):
             options = ["--nsec3-iterations", str(iterations)]
             if salt is not None:
                 options.extend(["--nsec3-salt", salt])
@@ -532,15 +533,12 @@ else:
         )
         self.assertLess(parent_contents.index(" IN DS "), parent_contents.index("; EOF"))
         commands = self.commands()
-        self.assertEqual(len(commands), 108)
+        self.assertEqual(len(commands), 111)
         self.assert_python_origins(commands)
         self.assert_signing_keys(commands)
         for prefix in (
             "cover.mismatch.nsec",
-            "cover.mismatch.nsec3",
-            "type.mismatch.nsec3",
             "type.mismatch.nsec",
-            "optout.mismatch.nsec3",
             "type.mx.mismatch.nsec",
             "type.txt.mismatch.nsec",
             "type.mx.mismatch.nsec3",
@@ -549,7 +547,9 @@ else:
             signed_file = self.work_directory / f"{prefix}.rsasha256.{BASE_ZONE_FILE}.signed"
             self.assertTrue(signed_file.is_file())
             self.assertTrue(Path(f"{signed_file}.orig").is_file())
-        for profile in ("iter0.saltA1B2", "iter1.nosalt", "iter1.saltA1B2"):
+        for profile in (
+            "iter0.nosalt", "iter0.saltA1B2", "iter1.nosalt", "iter1.saltA1B2",
+        ):
             for prefix in (
                 "cover.mismatch.nsec3",
                 "type.mismatch.nsec3",
@@ -576,7 +576,9 @@ else:
         parent_template = (
             SCRIPTS.parent / "templates" / "template.dnssec-check.jp.zone"
         ).read_text()
-        for profile in ("iter0.saltA1B2", "iter1.nosalt", "iter1.saltA1B2"):
+        for profile in (
+            "iter0.nosalt", "iter0.saltA1B2", "iter1.nosalt", "iter1.saltA1B2",
+        ):
             self.assertIn(f"cover.mismatch.nsec3.{profile}.rsasha256", parent_template)
         optout_calls = [
             arguments for command, arguments in commands
@@ -585,12 +587,9 @@ else:
             and arguments[arguments.index("-m") + 1] == "nsec3-optout-cover-mismatch"
         ]
         self.assertEqual(len(optout_calls), 4)
-        default_optout = next(
-            arguments for arguments in optout_calls
-            if "--nsec3-iterations" not in arguments
-        )
-        self.assertEqual(default_optout[default_optout.index("--target-name") + 1], "unsigned")
-        self.assertNotIn("--target-type", default_optout)
+        for arguments in optout_calls:
+            self.assertEqual(arguments[arguments.index("--target-name") + 1], "unsigned")
+            self.assertNotIn("--target-type", arguments)
         optout_sign_calls = [
             arguments for command, arguments in commands
             if command == "python-stub"
@@ -598,6 +597,7 @@ else:
         ]
         self.assertEqual(len(optout_sign_calls), 4)
         for profile, iterations, salt in (
+            ("iter0.nosalt", "0", None),
             ("iter0.saltA1B2", "0", "A1B2"),
             ("iter1.nosalt", "1", None),
             ("iter1.saltA1B2", "1", "A1B2"),

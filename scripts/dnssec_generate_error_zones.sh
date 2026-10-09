@@ -123,17 +123,8 @@ sh "$script_dir/dnssec_nsec_corrupt_zone.sh" \
 	"cover.mismatch.nsec.rsasha256.$base_zone_file" nsec-cover-mismatch \
 	"cover.mismatch.nsec.rsasha256.$zone_origin" "$key_directory" .
 sh "$script_dir/dnssec_nsec_corrupt_zone.sh" \
-	"cover.mismatch.nsec3.rsasha256.$base_zone_file" nsec3-cover-mismatch \
-	"cover.mismatch.nsec3.rsasha256.$zone_origin" "$key_directory" .
-sh "$script_dir/dnssec_nsec_corrupt_zone.sh" \
-	"type.mismatch.nsec3.rsasha256.$base_zone_file" nsec3-type-bitmap-mismatch \
-	"type.mismatch.nsec3.rsasha256.$zone_origin" "$key_directory" .
-sh "$script_dir/dnssec_nsec_corrupt_zone.sh" \
 	"type.mismatch.nsec.rsasha256.$base_zone_file" nsec-type-bitmap-mismatch \
 	"type.mismatch.nsec.rsasha256.$zone_origin" "$key_directory" .
-sh "$script_dir/dnssec_nsec_corrupt_zone.sh" \
-	"optout.mismatch.nsec3.rsasha256.$base_zone_file" nsec3-optout-cover-mismatch \
-	"optout.mismatch.nsec3.rsasha256.$zone_origin" "$key_directory" .
 
 for query_type in MX TXT; do
 	query_type_lower=$(printf '%s' "$query_type" | tr '[:upper:]' '[:lower:]')
@@ -146,8 +137,12 @@ for query_type in MX TXT; do
 	done
 done
 
-for nsec3_profile in iter0.saltA1B2 iter1.nosalt iter1.saltA1B2; do
+for nsec3_profile in iter0.nosalt iter0.saltA1B2 iter1.nosalt iter1.saltA1B2; do
 	case "$nsec3_profile" in
+		iter0.nosalt)
+			nsec3_iterations=0
+			nsec3_salt=
+			;;
 		iter0.saltA1B2)
 			nsec3_iterations=0
 			nsec3_salt=A1B2
