@@ -1,0 +1,16 @@
+$TTL	2m
+optout.mismatch.nsec3.algorithm.dnssec-check.jp.	IN	SOA	ns.dnssec-check.jp.	root.dnssec-check.jp. (
+				0000000001
+				2h
+				1h
+				1w
+				1h )
+		IN	NS	ns.dnssec-check.jp.
+		IN	NS	ns2.dnssec-check.jp.
+www		IN	A	160.16.207.148
+;
+; Unsigned delegation: no DS and no matching NSEC3 owner.
+unsigned	IN	NS	ns.dnssec-check.jp.
+		IN	NS	ns2.dnssec-check.jp.
+;
+; EOF
