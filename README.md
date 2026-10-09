@@ -201,14 +201,14 @@ PYTHON=.venv/bin/python \
 | `iter1.nosalt` | 1 | なし |
 | `iter1.saltA1B2` | 1 | `A1B2` |
 
-例えば `cover.mismatch.nsec3.iter1.saltA1B2.rsasha256.<zone>.zone` は、反復回数 1、salt `A1B2` の NSEC3 ゾーンにカバー不成立を作ります。サフィックスのない通常の NSEC3 ゾーンは `ldns-signzone` の既定値（反復回数 1、salt なし）を使います。`dnssec_generate_error_zones.sh` で署名・DS 追加まで行う場合、追加された委任先それぞれについても、通常と同じ形式の `.key`、`.private`、`.ds` ファイルが鍵ディレクトリに必要です。単に未署名のゾーンファイルを作る場合は `dnssec_make_error_zonefiles.sh` を使ってください。
+例えば `cover.mismatch.nsec3.iter1.saltA1B2.rsasha256.<zone>.zone` は、反復回数 1、salt `A1B2` の NSEC3 ゾーンにカバー不成立を作ります。`iter1.nosalt` は `ldns-signzone` の既定値（反復回数 1、salt なし）に対応します。`dnssec_generate_error_zones.sh` で署名・DS 追加まで行う場合、追加された委任先それぞれについても、通常と同じ形式の `.key`、`.private`、`.ds` ファイルが鍵ディレクトリに必要です。単に未署名のゾーンファイルを作る場合は `dnssec_make_error_zonefiles.sh` を使ってください。
 
 `dnssec_nsec_corrupt_zone.sh` では、`--target-type TYPE` でビットマップに追加する型を、`--nsec3-iterations COUNT` と `--nsec3-salt HEX` で NSEC3 の署名パラメーターを指定できます。salt は偶数桁の16進数です。例えば次の指定は反復回数 1、salt `A1B2` の NSEC3 ゾーンを作ります。
 
 ```sh
 sh scripts/dnssec_nsec_corrupt_zone.sh \
-  cover.mismatch.nsec3.rsasha256.example.test.zone \
-  nsec3-cover-mismatch cover.mismatch.nsec3.rsasha256.example.test \
+  cover.mismatch.nsec3.iter1.saltA1B2.rsasha256.example.test.zone \
+  nsec3-cover-mismatch cover.mismatch.nsec3.iter1.saltA1B2.rsasha256.example.test \
   /path/to/keys . \
   --nsec3-iterations 1 --nsec3-salt A1B2
 ```

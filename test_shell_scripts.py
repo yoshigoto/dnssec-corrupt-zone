@@ -202,7 +202,7 @@ else:
         self.prepare_child_zones()
         self.run_script("dnssec_sign_child_zones.sh", BASE_ZONE_FILE)
         commands = self.commands()
-        self.assertEqual(len(commands), 49)
+        self.assertEqual(len(commands), 47)
         self.assert_signing_keys(commands)
 
     def test_make_error_zonefiles_replaces_all_algorithm_occurrences(self) -> None:
@@ -239,6 +239,11 @@ else:
         ):
             contents = (output_directory / f"{zone_name}.{BASE_ZONE_FILE}").read_text()
             self.assertIn(f"{zone_name}.example.test.", contents)
+        for zone_name in (
+            "cover.mismatch.nsec3.rsasha256",
+            "type.mismatch.nsec3.rsasha256",
+        ):
+            self.assertFalse((output_directory / f"{zone_name}.{BASE_ZONE_FILE}").exists())
 
     def test_make_optout_zone_has_unsigned_delegation(self) -> None:
         self.prepare_child_zones()
@@ -273,12 +278,17 @@ else:
         }
         generated_zones = list(output_directory.glob("*.dnssec-check.jp.zone"))
         self.assertTrue(generated_zones)
+        standalone_optout_origin = dns.name.from_text(
+            "optout.mismatch.nsec3.rsasha256.dnssec-check.jp."
+        )
         for zone_file in generated_zones:
             child_origin = dns.name.from_text(
                 zone_file.name.removesuffix(".zone") + "."
             )
             with self.subTest(zone=zone_file.name):
-                self.assertIn(child_origin, delegations)
+                self.assertTrue(
+                    child_origin in delegations or child_origin == standalone_optout_origin
+                )
                 dns.zone.from_file(
                     str(zone_file), origin=child_origin, relativize=False,
                 )
@@ -533,7 +543,7 @@ else:
         )
         self.assertLess(parent_contents.index(" IN DS "), parent_contents.index("; EOF"))
         commands = self.commands()
-        self.assertEqual(len(commands), 111)
+        self.assertEqual(len(commands), 109)
         self.assert_python_origins(commands)
         self.assert_signing_keys(commands)
         for prefix in (
