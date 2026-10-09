@@ -75,6 +75,9 @@ case "$python" in
 		esac
 		;;
 esac
+PYTHON=$python
+DNSSEC_KEY_DIR=$key_directory
+export PYTHON DNSSEC_KEY_DIR
 
 cd "$output_directory"
 
