@@ -1,15 +1,19 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -lt 3 ] || [ "$#" -gt 5 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
-	printf 'Usage: %s <zone file name> <mode> <zone origin> [key directory] [zone directory]\n' "$0" >&2
+if [ "$#" -lt 3 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
+	printf 'Usage: %s <zone file name> <mode> <zone origin> [key directory] [zone directory] [--target-type TYPE] [--nsec3-iterations COUNT] [--nsec3-salt HEX]\n' "$0" >&2
 	exit 1
 fi
 
 zone_file_name=$1
 mode=$2
 zone_origin=$3
+shift 3
 use_optout=0
+target_type=A
+nsec3_iterations=
+nsec3_salt=
 
 case "$mode" in
 	nsec-cover-mismatch)
@@ -44,8 +48,58 @@ case "$mode" in
 		;;
 esac
 
-key_directory=${4:-${DNSSEC_KEY_DIR:-../keys}}
-zone_directory=${5:-${DNSSEC_ZONE_DIR:-.}}
+key_directory=${DNSSEC_KEY_DIR:-../keys}
+zone_directory=${DNSSEC_ZONE_DIR:-.}
+if [ "$#" -gt 0 ] && [ "${1#--}" = "$1" ]; then
+	key_directory=$1
+	shift
+fi
+if [ "$#" -gt 0 ] && [ "${1#--}" = "$1" ]; then
+	zone_directory=$1
+	shift
+fi
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--target-type|--nsec3-iterations|--nsec3-salt)
+			[ "$#" -ge 2 ] && [ -n "$2" ] || {
+				printf 'Missing value for %s\n' "$1" >&2
+				exit 1
+			}
+			case "$1" in
+				--target-type) target_type=$2 ;;
+				--nsec3-iterations) nsec3_iterations=$2 ;;
+				--nsec3-salt) nsec3_salt=$2 ;;
+			esac
+			shift 2
+			;;
+		*)
+			printf 'Unknown option: %s\n' "$1" >&2
+			exit 1
+			;;
+	esac
+done
+
+case "$nsec3_iterations" in
+	''|*[!0-9]*)
+		if [ -n "$nsec3_iterations" ]; then
+			printf 'Invalid NSEC3 iteration count: %s\n' "$nsec3_iterations" >&2
+			exit 1
+		fi
+		;;
+esac
+case "$nsec3_salt" in
+	''|*[!0123456789abcdefABCDEF]*)
+		if [ -n "$nsec3_salt" ]; then
+			printf 'Invalid NSEC3 salt (expected hexadecimal): %s\n' "$nsec3_salt" >&2
+			exit 1
+		fi
+		;;
+esac
+if [ $(( ${#nsec3_salt} % 2 )) -ne 0 ]; then
+	printf 'Invalid NSEC3 salt (expected an even number of hexadecimal digits): %s\n' "$nsec3_salt" >&2
+	exit 1
+fi
 
 zone_file="${zone_directory}/${zone_file_name}"
 signed_zone_file="${zone_file}.signed"
@@ -87,12 +141,17 @@ script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
 python=${PYTHON:-python3}
 
 if [ "$use_optout" -eq 1 ]; then
-	"$python" "$script_dir/dnssec_sign_optout_zone.py" \
-		-i "$zone_file" -o "$signed_zone_file" \
+	set -- -i "$zone_file" -o "$signed_zone_file" \
 		-d "$zone_origin" -t "$target_name_prefix" \
 		--zsk-key-base "$zsk_base" --ksk-key-base "$ksk_base"
+	[ -z "$nsec3_iterations" ] || set -- "$@" --nsec3-iterations "$nsec3_iterations"
+	[ -z "$nsec3_salt" ] || set -- "$@" --nsec3-salt "$nsec3_salt"
+	"$python" "$script_dir/dnssec_sign_optout_zone.py" "$@"
 elif [ "$use_nsec3" -eq 1 ]; then
-	ldns-signzone -n "$zone_file" "$zsk_base" "$ksk_base"
+	set -- -n
+	[ -z "$nsec3_iterations" ] || set -- "$@" -t "$nsec3_iterations"
+	[ -z "$nsec3_salt" ] || set -- "$@" -s "$nsec3_salt"
+	ldns-signzone "$@" "$zone_file" "$zsk_base" "$ksk_base"
 else
 	ldns-signzone "$zone_file" "$zsk_base" "$ksk_base"
 fi
@@ -105,7 +164,7 @@ if [ "$add_target_type" -eq 1 ]; then
 		-d "$zone_origin" -m "$mode" \
 		--target-name "$target_name_prefix" \
 		--zsk-private-key "$zsk_base.private" \
-		--target-type A
+		--target-type "$target_type"
 else
 	"$python" "$script_dir/../corrupt_zone.py" \
 		-i "$signed_zone_file" -o "$signed_zone_file.out" \

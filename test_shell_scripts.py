@@ -9,6 +9,7 @@ import unittest
 
 import dns.dnssec
 import dns.name
+import dns.rdataclass
 import dns.rdatatype
 import dns.zone
 
@@ -57,7 +58,7 @@ else:
         source = arguments[output_index + 1]
     else:
         source = next(argument for argument in arguments
-                      if not argument.startswith("-"))
+                      if argument.endswith(".zone") and Path(argument).is_file())
         output = source + ".signed"
     shutil.copyfile(source, output)
 """
@@ -169,7 +170,10 @@ else:
             if "-f" in arguments:
                 source = arguments[arguments.index("-f") + 2]
             else:
-                source = next(value for value in arguments if not value.startswith("-"))
+                source = next(
+                    value for value in arguments
+                    if value.endswith(".zone")
+                )
             expected_origin = Path(source).name.removesuffix(".zone")
             self.assertEqual(
                 arguments[-2:],
@@ -198,7 +202,7 @@ else:
         self.prepare_child_zones()
         self.run_script("dnssec_sign_child_zones.sh", BASE_ZONE_FILE)
         commands = self.commands()
-        self.assertEqual(len(commands), 33)
+        self.assertEqual(len(commands), 46)
         self.assert_signing_keys(commands)
 
     def test_make_error_zonefiles_replaces_all_algorithm_occurrences(self) -> None:
@@ -223,6 +227,17 @@ else:
             self.assertIn(f"success.{algorithm}.example.test.", contents)
             self.assertIn(f"ns.success.{algorithm}.example.test.", contents)
             self.assertNotIn("algorithm", contents)
+        for zone_name in (
+            "type.mx.mismatch.nsec.rsasha256",
+            "type.txt.mismatch.nsec.rsasha256",
+            "type.mx.mismatch.nsec3.rsasha256",
+            "type.txt.mismatch.nsec3.rsasha256",
+            "cover.mismatch.nsec3.iter0.saltA1B2.rsasha256",
+            "type.mismatch.nsec3.iter1.nosalt.rsasha256",
+            "optout.mismatch.nsec3.iter1.saltA1B2.rsasha256",
+        ):
+            contents = (output_directory / f"{zone_name}.{BASE_ZONE_FILE}").read_text()
+            self.assertIn(f"{zone_name}.example.test.", contents)
 
     def test_make_optout_zone_has_unsigned_delegation(self) -> None:
         self.prepare_child_zones()
@@ -235,6 +250,37 @@ else:
         self.assertIsNotNone(zone.get_rdataset(target, dns.rdatatype.NS))
         self.assertIsNone(zone.get_rdataset(target, dns.rdatatype.DS))
         self.assertIsNone(zone.get_rdataset(target, dns.rdatatype.AAAA))
+
+    def test_default_parent_delegates_all_generated_variations(self) -> None:
+        output_directory = self.work_directory / "default zones"
+        self.run_script(
+            "dnssec_make_error_zonefiles.sh",
+            "dnssec-check.jp.zone",
+            "--output-dir",
+            str(output_directory),
+        )
+        parent_origin = dns.name.from_text("dnssec-check.jp.")
+        parent_template = dns.zone.from_file(
+            str(SCRIPTS.parent / "templates" / "template.dnssec-check.jp.zone"),
+            origin=parent_origin,
+            relativize=False,
+        )
+        delegations = {
+            owner for owner, node in parent_template.nodes.items()
+            if node.get_rdataset(dns.rdataclass.IN, dns.rdatatype.NS) is not None
+            and owner != parent_origin
+        }
+        generated_zones = list(output_directory.glob("*.dnssec-check.jp.zone"))
+        self.assertTrue(generated_zones)
+        for zone_file in generated_zones:
+            child_origin = dns.name.from_text(
+                zone_file.name.removesuffix(".zone") + "."
+            )
+            with self.subTest(zone=zone_file.name):
+                self.assertIn(child_origin, delegations)
+                dns.zone.from_file(
+                    str(zone_file), origin=child_origin, relativize=False,
+                )
 
     def test_make_error_zonefiles_requires_optout_template(self) -> None:
         (self.template_directory / f"template.optout.algorithm.{BASE_ZONE_FILE}").unlink()
@@ -270,6 +316,48 @@ else:
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(message, result.stderr)
                 self.assertFalse(output.exists())
+
+    @unittest.skipUnless(
+        shutil.which("ldns-keygen") and shutil.which("ldns-signzone"),
+        "Real NSEC3 signing requires ldns-keygen and ldns-signzone",
+    )
+    def test_nsec3_signing_uses_iteration_and_salt_options(self) -> None:
+        origin = dns.name.from_text(f"nsec3-params.{PARENT_ORIGIN}.")
+        domain = origin.to_text()[:-1]
+        source = self.work_directory / f"{domain}.zone"
+        source.write_text(
+            f"$ORIGIN {origin}\n"
+            "$TTL 300\n"
+            "@ IN SOA ns hostmaster (1 2h 1h 1w 1h)\n"
+            "@ IN NS ns\n"
+            "ns IN A 192.0.2.1\n"
+            "www IN A 192.0.2.2\n"
+        )
+        for options in (["-k"], []):
+            result = subprocess.run(
+                ["ldns-keygen", "-a", "RSASHA256", "-b", "2048", *options, domain],
+                cwd=self.key_directory, capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        for iterations, salt in ((0, "A1B2"), (1, None), (1, "A1B2")):
+            options = ["--nsec3-iterations", str(iterations)]
+            if salt is not None:
+                options.extend(["--nsec3-salt", salt])
+            result = subprocess.run(
+                ["sh", str(SCRIPTS / "dnssec_nsec_corrupt_zone.sh"),
+                 source.name, "nsec3-cover-mismatch", domain,
+                 str(self.key_directory), str(self.work_directory), *options],
+                env={**os.environ, "PYTHON": sys.executable},
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            signed = dns.zone.from_file(
+                f"{source}.signed.orig", origin=origin, relativize=False,
+            )
+            parameter = signed.get_rdataset(origin, dns.rdatatype.NSEC3PARAM)[0]
+            self.assertEqual(parameter.iterations, iterations)
+            self.assertEqual(parameter.salt, bytes.fromhex(salt) if salt else b"")
 
     @unittest.skipUnless(
         shutil.which("ldns-keygen") and shutil.which("ldns-signzone"),
@@ -343,6 +431,24 @@ else:
              (covering[0], dns.rdatatype.RRSIG, dns.rdatatype.NSEC3)],
         )
         self.assertIsNone(modified.get_rdataset(target, dns.rdatatype.RRSIG))
+        for iterations, salt in ((0, "A1B2"), (1, None), (1, "A1B2")):
+            options = ["--nsec3-iterations", str(iterations)]
+            if salt is not None:
+                options.extend(["--nsec3-salt", salt])
+            result = subprocess.run(
+                ["sh", str(SCRIPTS / "dnssec_nsec_corrupt_zone.sh"),
+                 source.name, "nsec3-optout-cover-mismatch", domain,
+                 str(self.key_directory), str(self.work_directory), *options],
+                env={**os.environ, "PYTHON": sys.executable},
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            signed = dns.zone.from_file(
+                f"{source}.signed.orig", origin=origin, relativize=False,
+            )
+            parameter = signed.get_rdataset(origin, dns.rdatatype.NSEC3PARAM)[0]
+            self.assertEqual(parameter.iterations, iterations)
+            self.assertEqual(parameter.salt, bytes.fromhex(salt) if salt else b"")
 
     def test_add_ds_records_requires_ds_file_for_each_delegation(self) -> None:
         zone_file = self.work_directory / BASE_ZONE_FILE
@@ -426,7 +532,7 @@ else:
         )
         self.assertLess(parent_contents.index(" IN DS "), parent_contents.index("; EOF"))
         commands = self.commands()
-        self.assertEqual(len(commands), 69)
+        self.assertEqual(len(commands), 108)
         self.assert_python_origins(commands)
         self.assert_signing_keys(commands)
         for prefix in (
@@ -435,19 +541,78 @@ else:
             "type.mismatch.nsec3",
             "type.mismatch.nsec",
             "optout.mismatch.nsec3",
+            "type.mx.mismatch.nsec",
+            "type.txt.mismatch.nsec",
+            "type.mx.mismatch.nsec3",
+            "type.txt.mismatch.nsec3",
         ):
             signed_file = self.work_directory / f"{prefix}.rsasha256.{BASE_ZONE_FILE}.signed"
             self.assertTrue(signed_file.is_file())
             self.assertTrue(Path(f"{signed_file}.orig").is_file())
+        for profile in ("iter0.saltA1B2", "iter1.nosalt", "iter1.saltA1B2"):
+            for prefix in (
+                "cover.mismatch.nsec3",
+                "type.mismatch.nsec3",
+                "optout.mismatch.nsec3",
+            ):
+                signed_file = self.work_directory / (
+                    f"{prefix}.{profile}.rsasha256.{BASE_ZONE_FILE}.signed"
+                )
+                self.assertTrue(signed_file.is_file())
+                self.assertTrue(Path(f"{signed_file}.orig").is_file())
+        bitmap_calls = [
+            arguments for command, arguments in commands
+            if command == "python-stub"
+            and "-m" in arguments
+            and arguments[arguments.index("-m") + 1].endswith("type-bitmap-mismatch")
+        ]
+        self.assertEqual(
+            {
+                arguments[arguments.index("--target-type") + 1]
+                for arguments in bitmap_calls
+            },
+            {"A", "MX", "TXT"},
+        )
+        parent_template = (
+            SCRIPTS.parent / "templates" / "template.dnssec-check.jp.zone"
+        ).read_text()
+        for profile in ("iter0.saltA1B2", "iter1.nosalt", "iter1.saltA1B2"):
+            self.assertIn(f"cover.mismatch.nsec3.{profile}.rsasha256", parent_template)
         optout_calls = [
             arguments for command, arguments in commands
             if command == "python-stub"
             and "-m" in arguments
             and arguments[arguments.index("-m") + 1] == "nsec3-optout-cover-mismatch"
         ]
-        self.assertEqual(len(optout_calls), 1)
-        self.assertEqual(optout_calls[0][optout_calls[0].index("--target-name") + 1], "unsigned")
-        self.assertNotIn("--target-type", optout_calls[0])
+        self.assertEqual(len(optout_calls), 4)
+        default_optout = next(
+            arguments for arguments in optout_calls
+            if "--nsec3-iterations" not in arguments
+        )
+        self.assertEqual(default_optout[default_optout.index("--target-name") + 1], "unsigned")
+        self.assertNotIn("--target-type", default_optout)
+        optout_sign_calls = [
+            arguments for command, arguments in commands
+            if command == "python-stub"
+            and arguments[0].endswith("dnssec_sign_optout_zone.py")
+        ]
+        self.assertEqual(len(optout_sign_calls), 4)
+        for profile, iterations, salt in (
+            ("iter0.saltA1B2", "0", "A1B2"),
+            ("iter1.nosalt", "1", None),
+            ("iter1.saltA1B2", "1", "A1B2"),
+        ):
+            arguments = next(
+                call for call in optout_sign_calls if profile in call[call.index("-d") + 1]
+            )
+            self.assertEqual(
+                arguments[arguments.index("--nsec3-iterations") + 1],
+                iterations,
+            )
+            if salt is None:
+                self.assertNotIn("--nsec3-salt", arguments)
+            else:
+                self.assertEqual(arguments[arguments.index("--nsec3-salt") + 1], salt)
 
 
 if __name__ == "__main__":
