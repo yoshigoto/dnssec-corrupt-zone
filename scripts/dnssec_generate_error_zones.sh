@@ -1,28 +1,96 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -gt 1 ]; then
-	printf 'Usage: %s [base zone file name]\n' "$0" >&2
+script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
+caller_directory=$(pwd -P)
+template_directory="$script_dir/../templates"
+output_directory=$(pwd -P)
+base_zone_file=dnssec-check.jp.zone
+base_zone_file_set=0
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--template-dir)
+			[ "$#" -ge 2 ] && [ -n "$2" ] || {
+				printf 'Missing directory for --template-dir\n' >&2
+				exit 1
+			}
+			template_directory=$2
+			shift 2
+			;;
+		--output-dir)
+			[ "$#" -ge 2 ] && [ -n "$2" ] || {
+				printf 'Missing directory for --output-dir\n' >&2
+				exit 1
+			}
+			output_directory=$2
+			shift 2
+			;;
+		--help|-h)
+			printf 'Usage: %s [base zone file name] [--template-dir DIR] [--output-dir DIR]\n' "$0"
+			exit 0
+			;;
+		-*)
+			printf 'Unknown option: %s\n' "$1" >&2
+			exit 1
+			;;
+		*)
+			[ "$base_zone_file_set" -eq 0 ] || {
+				printf 'Usage: %s [base zone file name] [--template-dir DIR] [--output-dir DIR]\n' "$0" >&2
+				exit 1
+			}
+			base_zone_file=$1
+			base_zone_file_set=1
+			shift
+			;;
+	esac
+done
+
+zone_origin=${base_zone_file%.zone}
+
+if ! template_directory=$(CDPATH= cd -P "$template_directory" 2>/dev/null && pwd); then
+	printf 'Template directory not found: %s\n' "$template_directory" >&2
+	exit 1
+fi
+if ! mkdir -p "$output_directory"; then
+	printf 'Unable to create output directory: %s\n' "$output_directory" >&2
+	exit 1
+fi
+if ! output_directory=$(CDPATH= cd -P "$output_directory" && pwd); then
+	printf 'Unable to access output directory\n' >&2
 	exit 1
 fi
 
-base_zone_file=${1:-dnssec-check.jp.zone}
-zone_origin=${base_zone_file%.zone}
-script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
 key_directory=${DNSSEC_KEY_DIR:-../keys}
+if ! key_directory=$(CDPATH= cd -P "$key_directory" 2>/dev/null && pwd); then
+	printf 'Key directory not found: %s\n' "${DNSSEC_KEY_DIR:-../keys}" >&2
+	exit 1
+fi
 python=${PYTHON:-python3}
+case "$python" in
+	*/*)
+		case "$python" in
+			/*) ;;
+			*) python="$caller_directory/$python" ;;
+		esac
+		;;
+esac
+
+cd "$output_directory"
 
 printf '\n%s\n' "Create the zone files from a template."
-sh "$script_dir/dnssec_make_error_zonefiles.sh" "$base_zone_file"
+sh "$script_dir/dnssec_make_error_zonefiles.sh" \
+	"$base_zone_file" --template-dir "$template_directory"
 
 printf '\n%s\n' "Sign the child zone files."
 sh "$script_dir/dnssec_sign_child_zones.sh" "$base_zone_file" "$key_directory"
 
 printf '\n%s\n' "Corrupt child-zone signatures."
-sh "$script_dir/dnssec_corrupt_child_zone.sh" "$base_zone_file"
+sh "$script_dir/dnssec_corrupt_child_zone.sh" \
+	"$base_zone_file" "$template_directory"
 
 printf '\n%s\n' "Copy the parent zone template."
-cp -p "template.$base_zone_file" "$base_zone_file"
+cp -p "$template_directory/template.$base_zone_file" "$base_zone_file"
 
 printf '\n%s\n' "Add child-zone DS records."
 "$python" "$script_dir/dnssec_add_ds_records.py" \

@@ -1,13 +1,15 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -lt 1 ] || [ -z "$1" ]; then
-	printf 'Usage: %s <base zone name>\n' "$0" >&2
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] || [ -z "$1" ]; then
+	printf 'Usage: %s <base zone name> [template directory]\n' "$0" >&2
 	exit 1
 fi
 
 base_zone_name=$1
-template_file="template.$base_zone_name"
+script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
+template_directory=${2:-$script_dir/../templates}
+template_file="$template_directory/template.$base_zone_name"
 
 if [ ! -f "$template_file" ]; then
 	printf 'Template file not found: %s\n' "$template_file" >&2
