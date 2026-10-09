@@ -69,7 +69,7 @@ uv pip install --python .venv/bin/python -r requirements.txt
 
 `nsec-*` モードを署名済みゾーンに対して実行する場合は、NSEC/NSEC3 の RDATA を変更した後、`--zsk-private-key` で指定した ZSK、または `--key-directory` から自動選択した ZSK を使って変更対象 RRset の RRSIG だけを再生成します。`--sign-zone` を指定した場合は、未署名ゾーンに NSEC/NSEC3 を生成してからゾーン全体を署名し、その後に NSEC/NSEC3 を壊して変更対象 RRset の RRSIG だけを再生成します。`--key-directory` を使う場合は、`ldns-keygen` で生成した対応アルゴリズム（RSASHA256、ECDSAP256SHA256、ED25519、ED448）の `.key` と、同じベース名の `.private` を同じディレクトリに配置してください。
 
-`*-cover-mismatch` は、存在しない名前に対する NXDOMAIN 応答のカバー範囲を壊します。AAAA レコードだけが存在する名前への A 問い合わせのような NODATA 応答には、`*-type-bitmap-mismatch` を使います。対象名のビットマップに A を追加すると、権威サーバーの A/NODATA 応答と不在証明が矛盾します。
+`nsec-cover-mismatch` と `nsec3-cover-mismatch` は、存在しない名前に対する NXDOMAIN 応答のカバー範囲を壊します。`nsec3-optout-cover-mismatch` は、未署名委任への DS 問い合わせで使う Opt-Out 不在証明を壊します。AAAA レコードだけが存在する名前への A 問い合わせのような NODATA 応答には、`*-type-bitmap-mismatch` を使います。対象名のビットマップに A を追加すると、権威サーバーの A/NODATA 応答と不在証明が矛盾します。
 
 カバー範囲の終端は範囲に含まれないため、Next を指定名（NSEC3 では指定名のハッシュ）に変更します。Next を所有者自身にすると循環範囲が広がり、不在証明が検証成功する場合があるため、自己ループは使いません。変更対象 RRset の署名は再生成し、署名値ではなく不在証明の不整合を検証できるようにします。
 
@@ -132,15 +132,15 @@ NSEC3 署名済みゾーンを対象にする場合は、同じ対象名に `--m
 
 Opt-Out NSEC3 のカバー範囲を壊す場合は、`--mode nsec3-optout-cover-mismatch` を指定します。対象名は、変更対象となる Opt-Out NSEC3 が実際に覆う名前にしてください。
 
-AAAA レコードだけを持つ `optout-cover-mismatch.nsec3.error.example.test.` の A/NODATA 不在証明を壊すには、次のように実行します。
+Opt-Out の未署名委任とは別に、AAAA レコードだけを持つ `aaaa.nsec3.error.example.test.` の A/NODATA 不在証明を壊すには、次のように実行します。
 
 ```bash
 .venv/bin/python corrupt_zone.py \
-  --input optout-cover-mismatch.nsec3.error.example.test.zone \
-  --output optout-cover-mismatch.nsec3.error.example.test.nsec3-bitmap.zone.signed \
+  --input nsec3.error.example.test.zone \
+  --output nsec3.error.example.test.nsec3-bitmap.zone.signed \
   --origin nsec3.error.example.test. \
   --mode nsec3-type-bitmap-mismatch \
-  --target-name optout-cover-mismatch.nsec3.error.example.test. \
+  --target-name aaaa.nsec3.error.example.test. \
   --target-type A \
   --key-directory /path/to/keys \
   --sign-zone
@@ -168,6 +168,8 @@ PYTHON=.venv/bin/python DNSSEC_KEY_DIR=/path/to/keys \
 
 テンプレートは既定でリポジトリの `templates/` から読み込みます。別の場所を使う場合は `--template-dir DIR`、生成先を指定する場合は `--output-dir DIR` を指定します。どちらも相対パスはコマンド実行時のカレントディレクトリを基準に解決します。出力先は未作成でも作成されます。`dnssec_make_error_zonefiles.sh` 単体にも、同じ `--template-dir` / `--output-dir` オプションを指定できます。
 
+独自のテンプレートディレクトリには、`template.<base-zone>.zone`（親）、`template.algorithm.<base-zone>.zone`（通常の子）、`template.optout.algorithm.<base-zone>.zone`（Opt-Out 用の子）を用意してください。Opt-Out 用テンプレートには、`unsigned` という名前の NS 委任を置き、DS は置きません。
+
 `PYTHON` は Python 実行ファイル、`DNSSEC_KEY_DIR` は鍵ディレクトリを指定します。未指定の場合、Python は `python3`、鍵ディレクトリは実行時のカレントディレクトリから見た `../keys` です。スクリプト本体と `corrupt_zone.py` はスクリプトの配置場所を基準に検索します。個別の署名スクリプトでは `DNSSEC_ZONE_DIR` でゾーンディレクトリも指定できます。署名スクリプトの実行には `ldns-signzone` が PATH 上に必要です。
 
 ゾーン生成スクリプトは、親ゾーンテンプレートをコピーした後、親ゾーンの各子ゾーン委任に対応する `K<child-zone>.+*.ds` ファイルを `DNSSEC_KEY_DIR` から探し、DS レコードを追加します。DS ファイルは `ldns-key2ds` のゾーン形式出力を保存したもの（例: `ldns-key2ds Kchild.example.+008+12345.key > Kchild.example.+008+12345.ds`）を使います。委任先の DS ファイルがない、内容が DS レコードでない、または owner 名が委任先と異なる場合はエラー終了します。鍵ロールオーバーで複数の DS ファイルがある場合はすべて追加し、既に同じ DS がある場合は重複させません。
@@ -179,6 +181,51 @@ PYTHON=.venv/bin/python DNSSEC_KEY_DIR=/path/to/keys \
 ```sh
 python3 -m unittest -v test_shell_scripts.py
 ```
+
+`ldns-keygen` と `ldns-signzone` がある場合は、実鍵で Opt-Out ゾーンを署名・加工し、対象のハッシュが省略されていること、変更した NSEC3 とその RRSIG 以外が維持されることも検証します。これらのコマンドがない場合、その実鍵テストだけスキップします。
+
+### Opt-Out ケースの仕組みと比較方法
+
+生成するゾーンの構造は次のとおりです。
+
+```text
+dnssec-check.jp.
+  └─ optout.mismatch.nsec3.rsasha256.dnssec-check.jp.  ← DS のある署名済みゾーン
+       └─ unsigned                                     ← NS だけの未署名委任、DS なし
+```
+
+未署名委任 `unsigned` は存在しますが、Opt-Out ではその名前に一致する NSEC3 を省略できます。その代わり、`unsigned` のハッシュを覆う NSEC3 に Opt-Out フラグを立てます。これにより、バリデータは「この範囲には DS のない未署名委任があり得る」と判断でき、`unsigned` への DS 問い合わせの不在証明を検証できます。通常の存在しない名前に対する NXDOMAIN や、AAAA だけの名前への A/NODATA とは異なるケースです。
+
+`ldns-signzone -n -p` はフラグを立てますが、未署名委任のハッシュを省略しません。そのため [dnssec_sign_optout_zone.py](scripts/dnssec_sign_optout_zone.py) は、委任とその配下のレコードをいったん署名対象から外して NSEC3 を生成し、その後に元の委任レコードを戻します。委任の NS や glue は署名しません。この専用処理には、署名前のゾーンを渡してください。
+
+続いて `nsec3-optout-cover-mismatch` が、`unsigned` を覆う Opt-Out NSEC3 の Next を `unsigned` 自身のハッシュに変更し、その NSEC3 RRset だけを再署名します。範囲の終端はカバー対象に含まれないため、DS 不在証明が成立しなくなります。署名そのものの検証失敗ではありません。
+
+単独で試す場合は、リポジトリ直下から次のように実行できます。公開ゾーンや既存の鍵は変更せず、一時ディレクトリに学習用の鍵とゾーンを作ります。
+
+```sh
+zone=optout.mismatch.nsec3.rsasha256.dnssec-check.jp
+workdir=$(mktemp -d)
+sh scripts/dnssec_make_error_zonefiles.sh --output-dir "$workdir"
+(
+  mkdir "$workdir/keys"
+  cd "$workdir/keys"
+  ldns-keygen -a RSASHA256 -b 2048 -k "$zone"
+  ldns-keygen -a RSASHA256 -b 2048 "$zone"
+)
+PYTHON=.venv/bin/python sh scripts/dnssec_nsec_corrupt_zone.sh \
+  "$zone.zone" nsec3-optout-cover-mismatch "$zone" \
+  "$workdir/keys" "$workdir"
+
+diff -u "$workdir/$zone.zone.signed.orig" "$workdir/$zone.zone.signed"
+```
+
+- `.zone`：未署名委任を含む入力ゾーン。
+- `.zone.signed.orig`：正常な Opt-Out 署名済みゾーン。
+- `.zone.signed`：DS 不在証明を加工したゾーン。
+
+差分では、NSEC3 の Next と対応する `RRSIG NSEC3` の署名値だけが変わります（書式・並び順も変わる場合があります）。ハッシュアルゴリズム、Opt-Out フラグ、反復回数、salt、型ビットマップは変えません。`diff` は差分があると終了コード 1 を返します。
+
+権威サーバーで比較する場合、両ファイルを同じゾーン名で順番に読み込ませ、`unsigned.optout.mismatch.nsec3.rsasha256.dnssec-check.jp. DS` を問い合わせます。親ゾーンの KSK を信頼アンカーとして設定したバリデータで、正常系の DS 不在証明は検証成功し、加工後は不在証明の不足で検証失敗することを確認してください。NSD は権威応答を返すだけなので、`dig +dnssec` でレコードを見たことだけでは検証成功・失敗の確認になりません。
 
 ## NSD への反映
 

@@ -9,6 +9,7 @@ fi
 zone_file_name=$1
 mode=$2
 zone_origin=$3
+use_optout=0
 
 case "$mode" in
 	nsec-cover-mismatch)
@@ -26,10 +27,16 @@ case "$mode" in
 		use_nsec3=1
 		add_target_type=0
 		;;
-	nsec3-type-bitmap-mismatch|nsec3-optout-cover-mismatch)
+	nsec3-type-bitmap-mismatch)
 		target_name_prefix=target
 		use_nsec3=1
 		add_target_type=1
+		;;
+	nsec3-optout-cover-mismatch)
+		target_name_prefix=unsigned
+		use_nsec3=1
+		use_optout=1
+		add_target_type=0
 		;;
 	*)
 		printf 'Invalid mode: %s\n' "$mode" >&2
@@ -76,16 +83,21 @@ if [ -z "$ksk_base" ] || [ -z "$zsk_base" ]; then
 	exit 1
 fi
 
-if [ "$use_nsec3" -eq 1 ]; then
-	ldns-signzone -n -p "$zone_file" "$zsk_base" "$ksk_base"
+script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
+python=${PYTHON:-python3}
+
+if [ "$use_optout" -eq 1 ]; then
+	"$python" "$script_dir/dnssec_sign_optout_zone.py" \
+		-i "$zone_file" -o "$signed_zone_file" \
+		-d "$zone_origin" -t "$target_name_prefix" \
+		--zsk-key-base "$zsk_base" --ksk-key-base "$ksk_base"
+elif [ "$use_nsec3" -eq 1 ]; then
+	ldns-signzone -n "$zone_file" "$zsk_base" "$ksk_base"
 else
 	ldns-signzone "$zone_file" "$zsk_base" "$ksk_base"
 fi
 
 printf 'Signed zone file created at %s\n' "$signed_zone_file"
-
-script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
-python=${PYTHON:-python3}
 
 if [ "$add_target_type" -eq 1 ]; then
 	"$python" "$script_dir/../corrupt_zone.py" \

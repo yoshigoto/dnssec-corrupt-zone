@@ -122,3 +122,6 @@ sh "$script_dir/dnssec_nsec_corrupt_zone.sh" \
 sh "$script_dir/dnssec_nsec_corrupt_zone.sh" \
 	"type.mismatch.nsec.rsasha256.$base_zone_file" nsec-type-bitmap-mismatch \
 	"type.mismatch.nsec.rsasha256.$zone_origin" "$key_directory" .
+sh "$script_dir/dnssec_nsec_corrupt_zone.sh" \
+	"optout.mismatch.nsec3.rsasha256.$base_zone_file" nsec3-optout-cover-mismatch \
+	"optout.mismatch.nsec3.rsasha256.$zone_origin" "$key_directory" .

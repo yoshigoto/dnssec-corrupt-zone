@@ -63,6 +63,11 @@ if [ ! -f "$template_file" ]; then
 	printf 'Template file not found: %s\n' "$template_file" >&2
 	exit 1
 fi
+optout_template_file="$template_directory/template.optout.algorithm.$base_zone_file"
+if [ ! -f "$optout_template_file" ]; then
+	printf 'Template file not found: %s\n' "$optout_template_file" >&2
+	exit 1
+fi
 
 cd "$output_directory"
 
@@ -83,6 +88,6 @@ for algorithm in $signing_algorithms; do
 		sed 's/success/type.mismatch.nsec/g' "$success_file" > "type.mismatch.nsec.$algorithm.$base_zone_file"
 		sed 's/success/cover.mismatch.nsec3/g' "$success_file" > "cover.mismatch.nsec3.$algorithm.$base_zone_file"
 		sed 's/success/type.mismatch.nsec3/g' "$success_file" > "type.mismatch.nsec3.$algorithm.$base_zone_file"
-		sed 's/success/optout.mismatch.nsec3/g' "$success_file" > "optout.mismatch.nsec3.$algorithm.$base_zone_file"
+		sed "s/algorithm/$algorithm/g" "$optout_template_file" > "optout.mismatch.nsec3.$algorithm.$base_zone_file"
 	fi
 done

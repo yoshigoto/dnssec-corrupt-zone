@@ -1,10 +1,18 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+
+import dns.dnssec
+import dns.name
+import dns.rdatatype
+import dns.zone
+
+import corrupt_zone
 
 
 SCRIPTS = Path(__file__).resolve().parent / "scripts"
@@ -76,6 +84,14 @@ else:
         (self.template_directory / f"template.algorithm.{BASE_ZONE_FILE}").write_text(
             "success.algorithm.example.test.\n"
         )
+        (self.template_directory / f"template.optout.algorithm.{BASE_ZONE_FILE}").write_text(
+            "$ORIGIN optout.mismatch.nsec3.algorithm.example.test.\n"
+            "$TTL 300\n"
+            "@ IN SOA ns.example.test. hostmaster.example.test. (1 2h 1h 1w 1h)\n"
+            "@ IN NS ns.example.test.\n"
+            "www IN A 192.0.2.1\n"
+            "unsigned IN NS ns.example.test.\n"
+        )
 
     def run_script(
         self, name: str, *arguments: str, cwd: Path | None = None
@@ -122,12 +138,24 @@ else:
                 continue
             if arguments[0].endswith("dnssec_add_ds_records.py"):
                 continue
-            self.assertEqual(
-                Path(arguments[0]).resolve(), SCRIPTS.parent / "corrupt_zone.py"
-            )
+            if arguments[0].endswith("dnssec_sign_optout_zone.py"):
+                self.assertEqual(
+                    Path(arguments[0]).resolve(), SCRIPTS / "dnssec_sign_optout_zone.py"
+                )
+                self.assertEqual(arguments[arguments.index("-t") + 1], "unsigned")
+            else:
+                self.assertEqual(
+                    Path(arguments[0]).resolve(), SCRIPTS.parent / "corrupt_zone.py"
+                )
             source = Path(arguments[arguments.index("-i") + 1])
             expected_origin = source.name.removesuffix(".signed").removesuffix(".zone")
             self.assertEqual(arguments[arguments.index("-d") + 1], expected_origin)
+            for option, tag in (("--zsk-key-base", "00002"), ("--ksk-key-base", "00001")):
+                if option in arguments:
+                    self.assertEqual(
+                        arguments[arguments.index(option) + 1],
+                        str(self.key_directory / f"K{expected_origin}.+008+{tag}"),
+                    )
             if "--zsk-private-key" in arguments:
                 key = arguments[arguments.index("--zsk-private-key") + 1]
                 self.assertEqual(
@@ -195,6 +223,126 @@ else:
             self.assertIn(f"success.{algorithm}.example.test.", contents)
             self.assertIn(f"ns.success.{algorithm}.example.test.", contents)
             self.assertNotIn("algorithm", contents)
+
+    def test_make_optout_zone_has_unsigned_delegation(self) -> None:
+        self.prepare_child_zones()
+        origin = dns.name.from_text(f"optout.mismatch.nsec3.rsasha256.{PARENT_ORIGIN}.")
+        zone = dns.zone.from_file(
+            str(self.work_directory / f"{origin.to_text()[:-1]}.zone"),
+            origin=origin, relativize=False,
+        )
+        target = dns.name.from_text("unsigned", origin)
+        self.assertIsNotNone(zone.get_rdataset(target, dns.rdatatype.NS))
+        self.assertIsNone(zone.get_rdataset(target, dns.rdatatype.DS))
+        self.assertIsNone(zone.get_rdataset(target, dns.rdatatype.AAAA))
+
+    def test_make_error_zonefiles_requires_optout_template(self) -> None:
+        (self.template_directory / f"template.optout.algorithm.{BASE_ZONE_FILE}").unlink()
+        result = subprocess.run(
+            ["sh", str(SCRIPTS / "dnssec_make_error_zonefiles.sh"), BASE_ZONE_FILE,
+             "--template-dir", str(self.template_directory)],
+            cwd=self.work_directory, capture_output=True, text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Template file not found:", result.stderr)
+        self.assertIn("template.optout.algorithm.", result.stderr)
+        self.assertFalse(list(self.work_directory.glob(f"*.{BASE_ZONE_FILE}")))
+
+    def test_optout_signing_rejects_missing_delegation_or_ds(self) -> None:
+        origin = dns.name.from_text(f"optout.mismatch.nsec3.rsasha256.{PARENT_ORIGIN}.")
+        template = self.template_directory / f"template.optout.algorithm.{BASE_ZONE_FILE}"
+        for records, target, message in [
+            ("", "missing", "Unsigned NS delegation not found"),
+            ("unsigned IN DS 1 8 2 " + "00" * 32 + "\n", "unsigned",
+             "Opt-Out delegation must not have DS records"),
+            ("", "outside.test.", "Opt-Out target must be a child delegation"),
+        ]:
+            with self.subTest(target=target, records=records):
+                source = self.work_directory / "optout.zone"
+                source.write_text(template.read_text().replace("algorithm", "rsasha256") + records)
+                output = self.work_directory / "optout.zone.signed"
+                result = subprocess.run(
+                    [sys.executable, str(SCRIPTS / "dnssec_sign_optout_zone.py"),
+                     "-i", str(source), "-o", str(output), "-d", origin.to_text(),
+                     "-t", target, "--zsk-key-base", "unused", "--ksk-key-base", "unused"],
+                    capture_output=True, text=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertFalse(output.exists())
+
+    @unittest.skipUnless(
+        shutil.which("ldns-keygen") and shutil.which("ldns-signzone"),
+        "Real Opt-Out signing requires ldns-keygen and ldns-signzone",
+    )
+    def test_optout_signing_omits_unsigned_hash_and_preserves_other_signatures(self) -> None:
+        self.run_script(
+            "dnssec_make_error_zonefiles.sh", BASE_ZONE_FILE,
+            "--template-dir", str(self.template_directory),
+        )
+        origin = dns.name.from_text(f"optout.mismatch.nsec3.rsasha256.{PARENT_ORIGIN}.")
+        domain = origin.to_text()[:-1]
+        for options in (["-k"], []):
+            result = subprocess.run(
+                ["ldns-keygen", "-a", "RSASHA256", "-b", "2048", *options, domain],
+                cwd=self.key_directory, capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        source = self.work_directory / f"{domain}.zone"
+        result = subprocess.run(
+            ["sh", str(SCRIPTS / "dnssec_nsec_corrupt_zone.sh"),
+             source.name, "nsec3-optout-cover-mismatch", domain,
+             str(self.key_directory), str(self.work_directory)],
+            env={**os.environ, "PYTHON": sys.executable},
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        original = dns.zone.from_file(f"{source}.signed.orig", origin=origin, relativize=False)
+        modified = dns.zone.from_file(f"{source}.signed", origin=origin, relativize=False)
+        target = dns.name.from_text("unsigned", origin)
+        self.assertIsNotNone(original.get_rdataset(target, dns.rdatatype.NS))
+        self.assertIsNone(original.get_rdataset(target, dns.rdatatype.DS))
+        changes = []
+        covering = []
+        for owner, node in original.nodes.items():
+            for rdataset in node.rdatasets:
+                after = modified.nodes[owner].get_rdataset(
+                    rdataset.rdclass, rdataset.rdtype, rdataset.covers
+                )
+                if rdataset != after:
+                    changes.append((owner, rdataset.rdtype, rdataset.covers))
+                if rdataset.rdtype == dns.rdatatype.NSEC3:
+                    rdata = rdataset[0]
+                    hashed_target = dns.name.from_text(
+                        dns.dnssec.nsec3_hash(target, rdata.salt, rdata.iterations, rdata.algorithm),
+                        origin,
+                    )
+                    self.assertNotIn(hashed_target, original.nodes)
+                    if corrupt_zone.name_is_covered(owner, rdata.next_name(origin), hashed_target):
+                        covering.append(owner)
+                        self.assertEqual(rdata.flags & 1, 1)
+                        self.assertEqual(after[0].next_name(origin), hashed_target)
+                        self.assertEqual(after[0], rdata.replace(next=after[0].next))
+                    self.assertFalse(
+                        corrupt_zone.name_is_covered(owner, after[0].next_name(origin), hashed_target)
+                    )
+                if rdataset.rdtype != dns.rdatatype.RRSIG and owner != target:
+                    signatures = modified.nodes[owner].get_rdataset(
+                        rdataset.rdclass, dns.rdatatype.RRSIG, rdataset.rdtype
+                    )
+                    self.assertIsNotNone(signatures)
+                    dns.dnssec.validate(
+                        (owner, after), (owner, signatures),
+                        {origin: modified.get_rdataset(origin, dns.rdatatype.DNSKEY)},
+                        origin=origin,
+                    )
+        self.assertEqual(len(covering), 1)
+        self.assertCountEqual(
+            changes,
+            [(covering[0], dns.rdatatype.NSEC3, dns.rdatatype.NONE),
+             (covering[0], dns.rdatatype.RRSIG, dns.rdatatype.NSEC3)],
+        )
+        self.assertIsNone(modified.get_rdataset(target, dns.rdatatype.RRSIG))
 
     def test_add_ds_records_requires_ds_file_for_each_delegation(self) -> None:
         zone_file = self.work_directory / BASE_ZONE_FILE
@@ -275,7 +423,7 @@ else:
         )
         self.assertLess(parent_contents.index(" IN DS "), parent_contents.index("; EOF"))
         commands = self.commands()
-        self.assertEqual(len(commands), 67)
+        self.assertEqual(len(commands), 69)
         self.assert_python_origins(commands)
         self.assert_signing_keys(commands)
         for prefix in (
@@ -283,10 +431,20 @@ else:
             "cover.mismatch.nsec3",
             "type.mismatch.nsec3",
             "type.mismatch.nsec",
+            "optout.mismatch.nsec3",
         ):
             signed_file = self.work_directory / f"{prefix}.rsasha256.{BASE_ZONE_FILE}.signed"
             self.assertTrue(signed_file.is_file())
             self.assertTrue(Path(f"{signed_file}.orig").is_file())
+        optout_calls = [
+            arguments for command, arguments in commands
+            if command == "python-stub"
+            and "-m" in arguments
+            and arguments[arguments.index("-m") + 1] == "nsec3-optout-cover-mismatch"
+        ]
+        self.assertEqual(len(optout_calls), 1)
+        self.assertEqual(optout_calls[0][optout_calls[0].index("--target-name") + 1], "unsigned")
+        self.assertNotIn("--target-type", optout_calls[0])
 
 
 if __name__ == "__main__":
