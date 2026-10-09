@@ -406,9 +406,12 @@ else:
         self.prepare_child_zones()
         caller_directory = self.work_directory / "caller"
         caller_directory.mkdir()
+        self.environment["DNSSEC_KEY_DIR"] = str(self.work_directory / "wrong-keys")
         self.run_script(
             "dnssec_generate_error_zones.sh",
             BASE_ZONE_FILE,
+            "--key-dir",
+            str(self.key_directory),
             "--template-dir",
             str(self.template_directory),
             "--output-dir",

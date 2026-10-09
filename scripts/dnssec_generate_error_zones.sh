@@ -7,9 +7,18 @@ template_directory="$script_dir/../templates"
 output_directory=$(pwd -P)
 base_zone_file=dnssec-check.jp.zone
 base_zone_file_set=0
+key_directory=${DNSSEC_KEY_DIR:-../keys}
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
+		--key-dir)
+			[ "$#" -ge 2 ] && [ -n "$2" ] || {
+				printf 'Missing directory for --key-dir\n' >&2
+				exit 1
+			}
+			key_directory=$2
+			shift 2
+			;;
 		--template-dir)
 			[ "$#" -ge 2 ] && [ -n "$2" ] || {
 				printf 'Missing directory for --template-dir\n' >&2
@@ -27,7 +36,7 @@ while [ "$#" -gt 0 ]; do
 			shift 2
 			;;
 		--help|-h)
-			printf 'Usage: %s [base zone file name] [--template-dir DIR] [--output-dir DIR]\n' "$0"
+			printf 'Usage: %s [base zone file name] [--key-dir DIR] [--template-dir DIR] [--output-dir DIR]\n' "$0"
 			exit 0
 			;;
 		-*)
@@ -36,7 +45,7 @@ while [ "$#" -gt 0 ]; do
 			;;
 		*)
 			[ "$base_zone_file_set" -eq 0 ] || {
-				printf 'Usage: %s [base zone file name] [--template-dir DIR] [--output-dir DIR]\n' "$0" >&2
+				printf 'Usage: %s [base zone file name] [--key-dir DIR] [--template-dir DIR] [--output-dir DIR]\n' "$0" >&2
 				exit 1
 			}
 			base_zone_file=$1
@@ -61,9 +70,9 @@ if ! output_directory=$(CDPATH= cd -P "$output_directory" && pwd); then
 	exit 1
 fi
 
-key_directory=${DNSSEC_KEY_DIR:-../keys}
-if ! key_directory=$(CDPATH= cd -P "$key_directory" 2>/dev/null && pwd); then
-	printf 'Key directory not found: %s\n' "${DNSSEC_KEY_DIR:-../keys}" >&2
+key_directory_path=$key_directory
+if ! key_directory=$(CDPATH= cd -P "$key_directory_path" 2>/dev/null && pwd); then
+	printf 'Key directory not found: %s\n' "$key_directory_path" >&2
 	exit 1
 fi
 python=${PYTHON:-python3}
