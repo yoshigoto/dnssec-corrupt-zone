@@ -181,16 +181,16 @@ NSEC/NSEC3 のカバー範囲、NODATA 型ビットマップ、NSEC3 Opt-Out の
 `scripts/` には FreeBSD `/bin/sh` を含む POSIX `sh` 向けの補助スクリプトがあります。作業ディレクトリは任意で、次のように実行できます。
 
 ```sh
-PYTHON=.venv/bin/python DNSSEC_KEY_DIR=/path/to/keys \
+PYTHON=.venv/bin/python \
   sh /path/to/dnssec-corrupt-zone/scripts/dnssec_generate_error_zones.sh \
-  example.test.zone --output-dir /path/to/output
+  example.test.zone --key-dir /path/to/keys --output-dir /path/to/output
 ```
 
 テンプレートは既定でリポジトリの `templates/` から読み込みます。別の場所を使う場合は `--template-dir DIR`、生成先を指定する場合は `--output-dir DIR` を指定します。どちらも相対パスはコマンド実行時のカレントディレクトリを基準に解決します。出力先は未作成でも作成されます。`dnssec_make_error_zonefiles.sh` 単体にも、同じ `--template-dir` / `--output-dir` オプションを指定できます。
 
 独自のテンプレートディレクトリには、`template.<base-zone>.zone`（親）、`template.algorithm.<base-zone>.zone`（通常の子）、`template.optout.algorithm.<base-zone>.zone`（Opt-Out 用の子）を用意してください。Opt-Out 用テンプレートには、`unsigned` という名前の NS 委任を置き、DS は置きません。
 
-`PYTHON` は Python 実行ファイル、`DNSSEC_KEY_DIR` は鍵ディレクトリを指定します。未指定の場合、Python は `python3`、鍵ディレクトリは実行時のカレントディレクトリから見た `../keys` です。スクリプト本体と `corrupt_zone.py` はスクリプトの配置場所を基準に検索します。個別の署名スクリプトでは `DNSSEC_ZONE_DIR` でゾーンディレクトリも指定できます。署名スクリプトの実行には `ldns-signzone` が PATH 上に必要です。
+`PYTHON` は Python 実行ファイル、`--key-dir DIR` は鍵ディレクトリを指定します。鍵ディレクトリは環境変数 `DNSSEC_KEY_DIR` でも指定でき、`--key-dir` が優先されます。どちらも未指定の場合は、実行時のカレントディレクトリから見た `../keys` です。Python の既定値は `python3` です。スクリプト本体と `corrupt_zone.py` はスクリプトの配置場所を基準に検索します。個別の署名スクリプトでは `DNSSEC_ZONE_DIR` でゾーンディレクトリも指定できます。署名スクリプトの実行には `ldns-signzone` が PATH 上に必要です。
 
 ゾーン生成スクリプトは、親ゾーンテンプレートをコピーした後、親ゾーンの各子ゾーン委任に対応する `K<child-zone>.+*.ds` ファイルを `DNSSEC_KEY_DIR` から探し、DS レコードを追加します。DS ファイルは `ldns-key2ds` のゾーン形式出力を保存したもの（例: `ldns-key2ds Kchild.example.+008+12345.key > Kchild.example.+008+12345.ds`）を使います。委任先の DS ファイルがない、内容が DS レコードでない、または owner 名が委任先と異なる場合はエラー終了します。鍵ロールオーバーで複数の DS ファイルがある場合はすべて追加し、既に同じ DS がある場合は重複させません。
 
