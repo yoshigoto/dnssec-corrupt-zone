@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import time
 
 import dns.dnssec
 import dns.exception
@@ -17,6 +18,7 @@ import dns.rdata
 import dns.rdataclass
 import dns.rdataset
 import dns.rdatatype
+import dns.rrset
 import dns.rdtypes.util
 import dns.zone
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519, ed448, rsa
@@ -379,17 +381,67 @@ def find_ldns_signing_keys(
 
 
 def sign_zone_with_ldns_keys(
-    zone: dns.zone.Zone, zone_file: Path, key_directory: Path
+    zone: dns.zone.Zone, zone_file: Path, key_directory: Path, mode: str = "success"
 ) -> int:
     if zone.origin is None:
         raise ValueError("ゾーンオリジンがありません")
     keys = find_ldns_signing_keys(key_directory, zone_file, zone.origin)
+    if mode.startswith("nsec3-"):
+        sign_nsec3_zone(zone, keys, opt_out=mode == "nsec3-optout-cover-mismatch")
+        return 2
     dns.dnssec.sign_zone(
         zone,
         keys=[(keys.zsk.private_key, keys.zsk.dnskey), (keys.ksk.private_key, keys.ksk.dnskey)],
         lifetime=DEFAULT_SIGNATURE_LIFETIME,
     )
     return 2
+
+
+def sign_nsec3_zone(
+    zone: dns.zone.Zone, keys: LdnsSigningKeys, opt_out: bool = False
+) -> None:
+    if zone.origin is None:
+        raise ValueError("ゾーンオリジンがありません")
+    soa = zone.get_rdataset(zone.origin, dns.rdatatype.SOA)
+    if soa is None:
+        raise ValueError("NSEC3 署名には SOA レコードが必要です")
+    for owner, node in list(zone.nodes.items()):
+        node.rdatasets[:] = [
+            rdataset for rdataset in node.rdatasets
+            if rdataset.rdtype not in {
+                dns.rdatatype.RRSIG, dns.rdatatype.NSEC, dns.rdatatype.NSEC3,
+            }
+        ]
+        if not node.rdatasets:
+            zone.delete_node(owner)
+    dnskeys = zone.find_rdataset(zone.origin, dns.rdatatype.DNSKEY, create=True)
+    if not dnskeys:
+        dnskeys.ttl = soa.ttl
+    dnskeys.add(keys.ksk.dnskey)
+    dnskeys.add(keys.zsk.dnskey)
+    generate_nsec3_records(zone, flags=1 if opt_out else 0)
+
+    inception = int(time.time())
+    with zone.writer() as txn:
+        for owner in authoritative_zone_names(zone):
+            node = zone.get_node(owner)
+            if node is None:
+                continue
+            is_delegation = (
+                owner != zone.origin
+                and node.get_rdataset(IN, dns.rdatatype.NS) is not None
+            )
+            for rdataset in node.rdatasets:
+                if is_delegation and rdataset.rdtype != dns.rdatatype.DS:
+                    continue
+                rrset = dns.rrset.from_rdata(owner, rdataset.ttl, *rdataset)
+                dns.dnssec.default_rrset_signer(
+                    txn, rrset, signer=zone.origin,
+                    ksks=[(keys.ksk.private_key, keys.ksk.dnskey)],
+                    zsks=[(keys.zsk.private_key, keys.zsk.dnskey)],
+                    inception=inception, lifetime=DEFAULT_SIGNATURE_LIFETIME,
+                    origin=zone.origin,
+                )
 
 
 def find_zsk_dnskey(
@@ -476,6 +528,30 @@ def zone_names(zone: dns.zone.Zone) -> list[dns.name.Name]:
     return sorted(name.derelativize(zone.origin) for name in zone.nodes)
 
 
+def authoritative_zone_names(zone: dns.zone.Zone) -> list[dns.name.Name]:
+    if zone.origin is None:
+        raise ValueError("ゾーンオリジンがありません")
+    names: set[dns.name.Name] = set()
+    delegation: dns.name.Name | None = None
+    for name in zone_names(zone):
+        if delegation is not None and name.is_subdomain(delegation):
+            continue
+        node = zone.get_node(name)
+        if (
+            name != zone.origin and node is not None
+            and node.get_rdataset(IN, dns.rdatatype.NS) is not None
+        ):
+            delegation = name
+        else:
+            delegation = None
+        names.add(name)
+        parent = name
+        while parent != zone.origin:
+            parent = parent.parent()
+            names.add(parent)
+    return sorted(names)
+
+
 def node_types(zone: dns.zone.Zone, name: dns.name.Name) -> list[dns.rdatatype.RdataType]:
     relative_name = name.relativize(zone.origin)  # pyright: ignore
     node = zone.get_node(relative_name)
@@ -495,10 +571,12 @@ def add_rdataset(
     owner: dns.name.Name,
     rdtype: dns.rdatatype.RdataType,
     rdata: dns.rdata.Rdata,
+    ttl: int = 0,
 ) -> None:
     relative_owner = owner.relativize(zone.origin)  # pyright: ignore
     node = zone.find_node(relative_owner, create=True)
     rdataset = dns.rdataset.Rdataset(IN, rdtype)
+    rdataset.ttl = ttl
     rdataset.add(rdata)
     node.replace_rdataset(rdataset)
 
@@ -527,42 +605,58 @@ def nsec3_parameters(zone: dns.zone.Zone) -> tuple[int, int, int, bytes]:
     if node is not None:
         for rdataset in node.rdatasets:
             if rdataset.rdtype == dns.rdatatype.NSEC3PARAM:
+                if len(rdataset) != 1:
+                    raise ValueError("NSEC3PARAM は 1 レコードだけ指定してください")
                 parameter = next(iter(rdataset))
                 return parameter.algorithm, parameter.flags, parameter.iterations, parameter.salt
     return 1, 0, 0, b""
 
 
 def generate_nsec3_records(zone: dns.zone.Zone, flags: int = 0) -> int:
-    names = zone_names(zone)
+    names = authoritative_zone_names(zone)
     algorithm, _parameter_flags, iterations, salt = nsec3_parameters(zone)
     if zone.origin is None:
         raise ValueError("ゾーンオリジンがありません")
-    apex = zone.get_node(zone.origin.relativize(zone.origin))
-    has_parameters = apex is not None and any(
-        rdataset.rdtype == dns.rdatatype.NSEC3PARAM for rdataset in apex.rdatasets
+    soa = zone.get_rdataset(zone.origin, dns.rdatatype.SOA)
+    if soa is None:
+        raise ValueError("NSEC3 の生成には SOA レコードが必要です")
+    ttl = min(soa.ttl, zone.get_soa().minimum)
+    salt_text = salt.hex().upper() if salt else "-"
+    parameter = dns.rdata.from_text(
+        IN, dns.rdatatype.NSEC3PARAM,
+        f"{algorithm} 0 {iterations} {salt_text}", zone.origin,
     )
-    if not has_parameters:
-        salt_text = salt.hex().upper() if salt else "-"
-        parameter = dns.rdata.from_text(
-            IN,
-            dns.rdatatype.NSEC3PARAM,
-            f"{algorithm} 0 {iterations} {salt_text}",
-            zone.origin,
-        )
-        add_rdataset(zone, zone.origin, dns.rdatatype.NSEC3PARAM, parameter)
+    add_rdataset(zone, zone.origin, dns.rdatatype.NSEC3PARAM, parameter, ttl=ttl)
+    types_by_name: dict[dns.name.Name, set[dns.rdatatype.RdataType]] = {}
+    for name in names:
+        node = zone.get_node(name)
+        types = {
+            rdataset.rdtype for rdataset in node.rdatasets if rdataset.rdclass == IN
+        } if node is not None else set()
+        if name != zone.origin and dns.rdatatype.NS in types:
+            has_ds = dns.rdatatype.DS in types
+            if flags & 1 and not has_ds:
+                continue
+            types = {dns.rdatatype.NS}
+            if has_ds:
+                types.update({dns.rdatatype.DS, dns.rdatatype.RRSIG})
+        elif types:
+            types.add(dns.rdatatype.RRSIG)
+        types_by_name[name] = types
     hashed_names = sorted(
         (
             dns.dnssec.nsec3_hash(name, salt, iterations, algorithm),
             name,
         )
-        for name in names
+        for name in types_by_name
     )
     if not hashed_names:
         return 0
+    if len({encoded for encoded, _name in hashed_names}) != len(hashed_names):
+        raise ValueError("NSEC3 ハッシュが衝突しました。異なる salt を指定してください")
     for index, (encoded_owner, original_name) in enumerate(hashed_names):
         next_owner = hashed_names[(index + 1) % len(hashed_names)][0]
-        types = [*node_types(zone, original_name), dns.rdatatype.NSEC3]
-        salt_text = salt.hex().upper() if salt else "-"
+        types = sorted(types_by_name[original_name], key=int)
         rdata = dns.rdata.from_text(
             IN,
             dns.rdatatype.NSEC3,
@@ -571,7 +665,7 @@ def generate_nsec3_records(zone: dns.zone.Zone, flags: int = 0) -> int:
             zone.origin,
         )
         owner = dns.name.from_text(f"{encoded_owner}.{zone.origin}")
-        add_rdataset(zone, owner, dns.rdatatype.NSEC3, rdata)
+        add_rdataset(zone, owner, dns.rdatatype.NSEC3, rdata, ttl=ttl)
     return len(hashed_names)
 
 
@@ -885,7 +979,7 @@ def main() -> None:
 
     try:
         if post_sign_modify:
-            if required_denial_type(args.mode) is not None:
+            if required_denial_type(args.mode) == dns.rdatatype.NSEC:
                 ensure_denial_records(zone, args.mode)
             changed = 0
         else:
@@ -921,7 +1015,7 @@ def main() -> None:
         if args.key_directory is None:
             raise SystemExit("--sign-zone では --key-directory が必要です")
         try:
-            sign_zone_with_ldns_keys(zone, args.input, args.key_directory)
+            sign_zone_with_ldns_keys(zone, args.input, args.key_directory, args.mode)
             if post_sign_modify:
                 before_denial = (
                     denial_rrset_snapshot(zone, required_denial_type(args.mode))

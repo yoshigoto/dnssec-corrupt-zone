@@ -1,6 +1,8 @@
 import unittest
 import base64
 from pathlib import Path
+import shutil
+import subprocess
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 from unittest.mock import patch
 
@@ -444,6 +446,222 @@ class CorruptZoneTests(unittest.TestCase):
                 if rdataset.rdtype == dns.rdatatype.NSEC3PARAM
             )
         )
+
+    def test_nsec3_signing_builds_valid_chain_and_bitmaps(self) -> None:
+        with TemporaryDirectory() as directory:
+            key_dir = Path(directory)
+            for flags in (257, 256):
+                self._write_ldns_key_pair(
+                    key_dir, "example", ec.generate_private_key(ec.SECP256R1()),
+                    flags=flags, algorithm=13,
+                )
+            for mode in ("nsec3-cover-mismatch", "nsec3-optout-cover-mismatch"):
+                with self.subTest(mode=mode):
+                    zone = dns.zone.from_text(
+                        self._unsigned_zone_text()
+                        + "aaaa 300 IN AAAA 2001:db8::1\n"
+                        + "leaf.branch 300 IN A 192.0.2.2\n"
+                        + "*.wild 300 IN AAAA 2001:db8::2\n"
+                        + "secure 300 IN NS ns.secure.example.\n"
+                        + "secure 300 IN DS 1 13 2 " + "00" * 32 + "\n"
+                        + "ns.secure 300 IN A 192.0.2.3\n"
+                        + "unsigned 300 IN NS ns.unsigned.example.\n"
+                        + "unsigned 300 IN A 192.0.2.4\n"
+                        + "ns.unsigned 300 IN A 192.0.2.4\n"
+                        + "@ 300 IN NSEC3PARAM 1 0 2 AABB\n",
+                        origin=ORIGIN, relativize=True,
+                    )
+                    self.assertEqual(
+                        corrupt_zone.sign_zone_with_ldns_keys(
+                            zone, Path("example.zone"), key_dir, mode
+                        ),
+                        2,
+                    )
+                    expected_types = {
+                        "@": {"SOA", "NS", "DNSKEY", "NSEC3PARAM", "RRSIG"},
+                        "ns": {"A", "RRSIG"},
+                        "www": {"A", "RRSIG"},
+                        "aaaa": {"AAAA", "RRSIG"},
+                        "branch": set(),
+                        "leaf.branch": {"A", "RRSIG"},
+                        "wild": set(),
+                        "*.wild": {"AAAA", "RRSIG"},
+                        "secure": {"NS", "DS", "RRSIG"},
+                    }
+                    opt_out = mode == "nsec3-optout-cover-mismatch"
+                    if not opt_out:
+                        expected_types["unsigned"] = {"NS"}
+                    expected_hashes = sorted(
+                        dns.dnssec.nsec3_hash(
+                            dns.name.from_text(name, ORIGIN), b"\xaa\xbb", 2, 1
+                        )
+                        for name in expected_types
+                    )
+                    self.assertEqual(
+                        len(list(zone.iterate_rdatasets(dns.rdatatype.NSEC3))),
+                        len(expected_hashes),
+                    )
+                    for name, types in expected_types.items():
+                        hashed = dns.dnssec.nsec3_hash(
+                            dns.name.from_text(name, ORIGIN), b"\xaa\xbb", 2, 1
+                        )
+                        owner = dns.name.from_text(hashed, ORIGIN)
+                        rdataset = zone.get_rdataset(owner, dns.rdatatype.NSEC3)
+                        self.assertIsNotNone(rdataset)
+                        self.assertEqual(rdataset.ttl, 300)
+                        rdata = rdataset[0]
+                        self.assertEqual(rdata.flags, int(opt_out))
+                        self.assertEqual(rdata.iterations, 2)
+                        self.assertEqual(rdata.salt, b"\xaa\xbb")
+                        self.assertEqual(
+                            rdata.next,
+                            base64.b32hexdecode(
+                                expected_hashes[(expected_hashes.index(hashed) + 1) % len(expected_hashes)]
+                            ),
+                        )
+                        self.assertEqual(
+                            {dns.rdatatype.to_text(t) for t in corrupt_zone.bitmap_rdtypes(rdata.windows)},
+                            types,
+                        )
+                    for name in ("ns.secure", "ns.unsigned"):
+                        hashed = dns.dnssec.nsec3_hash(
+                            dns.name.from_text(name, ORIGIN), b"\xaa\xbb", 2, 1
+                        )
+                        self.assertIsNone(
+                            zone.get_rdataset(dns.name.from_text(hashed, ORIGIN), dns.rdatatype.NSEC3)
+                        )
+                    self._assert_nsec3_signatures_valid(zone)
+                    output = key_dir / "baseline.zone.signed"
+                    corrupt_zone.save_zone(zone, output)
+                    if shutil.which("ldns-verify-zone"):
+                        result = subprocess.run(
+                            ["ldns-verify-zone", str(output)],
+                            capture_output=True, text=True,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_nsec3_generation_rejects_ambiguous_parameters_and_hash_collisions(self) -> None:
+        zone = dns.zone.from_text(
+            self._unsigned_zone_text()
+            + "@ 300 IN NSEC3PARAM 1 0 0 -\n"
+            + "@ 300 IN NSEC3PARAM 1 0 2 AABB\n",
+            origin=ORIGIN,
+        )
+        with self.assertRaisesRegex(ValueError, "NSEC3PARAM"):
+            corrupt_zone.generate_nsec3_records(zone)
+        zone = dns.zone.from_text(self._unsigned_zone_text(), origin=ORIGIN)
+        with patch("dns.dnssec.nsec3_hash", return_value="0" * 32):
+            with self.assertRaisesRegex(ValueError, "ハッシュが衝突"):
+                corrupt_zone.generate_nsec3_records(zone)
+
+    def test_nsec3_resigning_rebuilds_existing_denial_chain(self) -> None:
+        with TemporaryDirectory() as directory:
+            key_dir = Path(directory)
+            for flags in (257, 256):
+                self._write_ldns_key_pair(
+                    key_dir, "example", ec.generate_private_key(ec.SECP256R1()),
+                    flags=flags, algorithm=13,
+                )
+            zone = dns.zone.from_text(self._unsigned_zone_text(), origin=ORIGIN)
+            corrupt_zone.sign_zone_with_ldns_keys(
+                zone, Path("example.zone"), key_dir, "nsec3-cover-mismatch"
+            )
+            before = corrupt_zone.denial_rrset_snapshot(zone, dns.rdatatype.NSEC3)
+            corrupt_zone.sign_zone_with_ldns_keys(
+                zone, Path("example.zone"), key_dir, "nsec3-cover-mismatch"
+            )
+            self.assertEqual(
+                corrupt_zone.denial_rrset_snapshot(zone, dns.rdatatype.NSEC3), before
+            )
+            self._assert_nsec3_signatures_valid(zone)
+            corrupt_zone.generate_nsec_records(zone)
+            corrupt_zone.sign_zone_with_ldns_keys(
+                zone, Path("example.zone"), key_dir, "nsec3-cover-mismatch"
+            )
+            self.assertEqual(
+                corrupt_zone.denial_rrset_snapshot(zone, dns.rdatatype.NSEC3), before
+            )
+            self._assert_nsec3_signatures_valid(zone)
+
+    def test_main_signs_then_corrupts_and_resigns_nsec3_all_algorithms(self) -> None:
+        algorithms = [
+            (8, lambda: rsa.generate_private_key(public_exponent=65537, key_size=2048)),
+            (13, lambda: ec.generate_private_key(ec.SECP256R1())),
+            (15, lambda: ed25519.Ed25519PrivateKey.generate()),
+            (16, lambda: ed448.Ed448PrivateKey.generate()),
+        ]
+        for algorithm, keygen in algorithms:
+            with self.subTest(algorithm=algorithm), TemporaryDirectory() as directory:
+                key_dir = Path(directory)
+                for flags in (257, 256):
+                    self._write_ldns_key_pair(
+                        key_dir, "example", keygen(), flags=flags, algorithm=algorithm
+                    )
+                source = key_dir / "example.zone"
+                source.write_text(
+                    self._unsigned_zone_text()
+                    + "aaaa 300 IN AAAA 2001:db8::1\n"
+                    + "unsigned 300 IN NS ns.example.\n"
+                )
+                for mode, target in [
+                    ("nsec3-cover-mismatch", "missing"),
+                    ("nsec3-type-bitmap-mismatch", "aaaa"),
+                    ("nsec3-optout-cover-mismatch", "unsigned"),
+                ]:
+                    with self.subTest(mode=mode):
+                        baseline = dns.zone.from_file(str(source), origin=ORIGIN, relativize=False)
+                        corrupt_zone.sign_zone_with_ldns_keys(baseline, source, key_dir, mode)
+                        self._assert_nsec3_signatures_valid(baseline)
+                        before = corrupt_zone.denial_rrset_snapshot(baseline, dns.rdatatype.NSEC3)
+                        output = key_dir / f"{mode}.zone.signed"
+                        with patch("sys.argv", [
+                            "corrupt_zone.py", "-i", str(source), "-o", str(output),
+                            "-d", "example.", "-m", mode, "-t", target,
+                            "--sign-zone", "-k", str(key_dir),
+                        ]):
+                            corrupt_zone.main()
+                        zone = dns.zone.from_file(str(output), origin=ORIGIN, relativize=False)
+                        self._assert_nsec3_signatures_valid(zone)
+                        after = corrupt_zone.denial_rrset_snapshot(zone, dns.rdatatype.NSEC3)
+                        changed = [owner for owner in after if after[owner] != before[owner]]
+                        self.assertEqual(len(changed), 1)
+                        rdata = zone.get_rdataset(changed[0], dns.rdatatype.NSEC3)[0]
+                        hashed = dns.dnssec.nsec3_hash(target + ".example.", b"", 0, 1)
+                        if mode == "nsec3-type-bitmap-mismatch":
+                            self.assertTrue(corrupt_zone.bitmap_contains(rdata, dns.rdatatype.A))
+                        else:
+                            self.assertEqual(rdata.next, base64.b32hexdecode(hashed))
+                            self.assertFalse(corrupt_zone.name_is_covered(
+                                changed[0].derelativize(ORIGIN), rdata.next_name(ORIGIN),
+                                dns.name.from_text(hashed, ORIGIN),
+                            ))
+
+    def _assert_nsec3_signatures_valid(self, zone: dns.zone.Zone) -> None:
+        self.assertFalse(list(zone.iterate_rdatasets(dns.rdatatype.NSEC)))
+        keys = zone.get_rdataset(zone.origin, dns.rdatatype.DNSKEY)
+        authoritative = set(corrupt_zone.authoritative_zone_names(zone))
+        for owner, node in zone.nodes.items():
+            absolute_owner = owner.derelativize(zone.origin)
+            delegation = (
+                absolute_owner != zone.origin
+                and node.get_rdataset(corrupt_zone.IN, dns.rdatatype.NS) is not None
+            )
+            for rdataset in node.rdatasets:
+                if rdataset.rdtype == dns.rdatatype.RRSIG:
+                    continue
+                signatures = node.get_rdataset(
+                    rdataset.rdclass, dns.rdatatype.RRSIG, rdataset.rdtype
+                )
+                if absolute_owner not in authoritative or (
+                    delegation and rdataset.rdtype != dns.rdatatype.DS
+                ):
+                    self.assertIsNone(signatures)
+                    continue
+                self.assertIsNotNone(signatures)
+                dns.dnssec.validate(
+                    (absolute_owner, rdataset), (absolute_owner, signatures),
+                    {zone.origin: keys}, origin=zone.origin,
+                )
 
     def test_resign_changed_nsec_rrset(self) -> None:
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
