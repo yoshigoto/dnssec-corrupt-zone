@@ -134,3 +134,49 @@ sh "$script_dir/dnssec_nsec_corrupt_zone.sh" \
 sh "$script_dir/dnssec_nsec_corrupt_zone.sh" \
 	"optout.mismatch.nsec3.rsasha256.$base_zone_file" nsec3-optout-cover-mismatch \
 	"optout.mismatch.nsec3.rsasha256.$zone_origin" "$key_directory" .
+
+for query_type in MX TXT; do
+	query_type_lower=$(printf '%s' "$query_type" | tr '[:upper:]' '[:lower:]')
+	for denial_type in nsec nsec3; do
+		zone_prefix="type.$query_type_lower.mismatch.$denial_type.rsasha256"
+		sh "$script_dir/dnssec_nsec_corrupt_zone.sh" \
+			"$zone_prefix.$base_zone_file" "$denial_type-type-bitmap-mismatch" \
+			"$zone_prefix.$zone_origin" "$key_directory" . \
+			--target-type "$query_type"
+	done
+done
+
+for nsec3_profile in iter0.saltA1B2 iter1.nosalt iter1.saltA1B2; do
+	case "$nsec3_profile" in
+		iter0.saltA1B2)
+			nsec3_iterations=0
+			nsec3_salt=A1B2
+			;;
+		iter1.nosalt)
+			nsec3_iterations=1
+			nsec3_salt=
+			;;
+		iter1.saltA1B2)
+			nsec3_iterations=1
+			nsec3_salt=A1B2
+			;;
+	esac
+
+	for mode in nsec3-cover-mismatch nsec3-type-bitmap-mismatch; do
+		case "$mode" in
+			nsec3-cover-mismatch) zone_prefix="cover.mismatch.nsec3.$nsec3_profile.rsasha256" ;;
+			nsec3-type-bitmap-mismatch) zone_prefix="type.mismatch.nsec3.$nsec3_profile.rsasha256" ;;
+		esac
+		set -- "$zone_prefix.$base_zone_file" "$mode" "$zone_prefix.$zone_origin" \
+			"$key_directory" . --nsec3-iterations "$nsec3_iterations"
+		[ -z "$nsec3_salt" ] || set -- "$@" --nsec3-salt "$nsec3_salt"
+		sh "$script_dir/dnssec_nsec_corrupt_zone.sh" "$@"
+	done
+
+	zone_prefix="optout.mismatch.nsec3.$nsec3_profile.rsasha256"
+	set -- "$zone_prefix.$base_zone_file" nsec3-optout-cover-mismatch \
+		"$zone_prefix.$zone_origin" "$key_directory" . \
+		--nsec3-iterations "$nsec3_iterations"
+	[ -z "$nsec3_salt" ] || set -- "$@" --nsec3-salt "$nsec3_salt"
+	sh "$script_dir/dnssec_nsec_corrupt_zone.sh" "$@"
+done

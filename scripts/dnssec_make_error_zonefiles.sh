@@ -86,8 +86,22 @@ for algorithm in $signing_algorithms; do
 	if [ "$algorithm" = "rsasha256" ]; then
 		sed 's/success/cover.mismatch.nsec/g' "$success_file" > "cover.mismatch.nsec.$algorithm.$base_zone_file"
 		sed 's/success/type.mismatch.nsec/g' "$success_file" > "type.mismatch.nsec.$algorithm.$base_zone_file"
+		sed 's/success/type.mx.mismatch.nsec/g' "$success_file" > "type.mx.mismatch.nsec.$algorithm.$base_zone_file"
+		sed 's/success/type.txt.mismatch.nsec/g' "$success_file" > "type.txt.mismatch.nsec.$algorithm.$base_zone_file"
 		sed 's/success/cover.mismatch.nsec3/g' "$success_file" > "cover.mismatch.nsec3.$algorithm.$base_zone_file"
 		sed 's/success/type.mismatch.nsec3/g' "$success_file" > "type.mismatch.nsec3.$algorithm.$base_zone_file"
+		sed 's/success/type.mx.mismatch.nsec3/g' "$success_file" > "type.mx.mismatch.nsec3.$algorithm.$base_zone_file"
+		sed 's/success/type.txt.mismatch.nsec3/g' "$success_file" > "type.txt.mismatch.nsec3.$algorithm.$base_zone_file"
 		sed "s/algorithm/$algorithm/g" "$optout_template_file" > "optout.mismatch.nsec3.$algorithm.$base_zone_file"
+
+		for nsec3_profile in iter0.saltA1B2 iter1.nosalt iter1.saltA1B2; do
+			sed "s/success/cover.mismatch.nsec3.$nsec3_profile/g" "$success_file" \
+				> "cover.mismatch.nsec3.$nsec3_profile.$algorithm.$base_zone_file"
+			sed "s/success/type.mismatch.nsec3.$nsec3_profile/g" "$success_file" \
+				> "type.mismatch.nsec3.$nsec3_profile.$algorithm.$base_zone_file"
+			sed "s/algorithm/$algorithm/g; s/optout.mismatch.nsec3/optout.mismatch.nsec3.$nsec3_profile/g" \
+				"$optout_template_file" \
+				> "optout.mismatch.nsec3.$nsec3_profile.$algorithm.$base_zone_file"
+		done
 	fi
 done
