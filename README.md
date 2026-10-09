@@ -30,7 +30,7 @@ uv pip install --python .venv/bin/python -r requirements.txt
 ## 使い方
 
 ```text
-.venv/bin/python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode MODE [--target-name NAME] [--target-type TYPE] [--zsk-private-key PRIVATE_FILE] [--key-directory KEY_DIR] [--sign-zone] [--increment-serial]
+.venv/bin/python corrupt_zone.py --input INPUT --output OUTPUT --origin ZONE_ORIGIN --mode MODE [--target-name NAME] [--target-type TYPE] [--zsk-private-key PRIVATE_FILE] [--key-directory KEY_DIR] [--sign-zone]
 ```
 
 | 引数 | 説明 |
@@ -44,9 +44,10 @@ uv pip install --python .venv/bin/python -r requirements.txt
 | `--zsk-private-key` | `nsec-*` モードで変更した NSEC/NSEC3 RRset を再署名する ZSK の `.private` ファイル (RSASHA256 (8)、ECDSAP256SHA256 (13)、ED25519 (15)、ED448 (16))。省略時は `--key-directory` から自動選択 |
 | `--key-directory`, `-k` | `ldns-keygen` 形式の KSK/ZSK 鍵ファイルがあるディレクトリ。ゾーンファイル名から `K<zone>.+<algorithm>+<keytag>.key` を探し、DNSKEY フラグ 257 を KSK、256 を ZSK として選択する。対応する秘密鍵は `.key` と同じベース名に `.private` を付けたファイルを使う |
 | `--sign-zone` | dnspython でゾーン全体を署名する。`ds-keytag-mismatch` と `ds-hash-mismatch` は加工後に署名し、`ds-rrsig-corrupt`、`dnskey-rrsig-*`、`nsec-*` は署名後に加工する |
-| `--increment-serial`, `-s` | SOA レコードの Serial を 1 インクリメントする |
 
 出力先ディレクトリが存在しない場合は作成されます。対象レコードが見つからない場合、ゾーンを出力せずエラー終了します。
+
+SOA の Serial は入力値を保持し、このツールでは変更しません。AXFR/IXFR などによる配布で Serial の更新が必要な場合は、署名前のテンプレートやゾーン更新処理で更新し、その後に署名・検証用の加工を行ってください。
 
 ## 検証ケース
 
@@ -68,6 +69,10 @@ uv pip install --python .venv/bin/python -r requirements.txt
 加工対象となる `DS` は親ゾーンのものであり、加工対象となる `RRSIG` は子ゾーンのものです。同じ委任先について複数の失敗パターンを公開する場合は、毎回、元の正常な署名済みゾーンから個別に出力してください。
 
 `nsec-*` モードを署名済みゾーンに対して実行する場合は、NSEC/NSEC3 の RDATA を変更した後、`--zsk-private-key` で指定した ZSK、または `--key-directory` から自動選択した ZSK を使って変更対象 RRset の RRSIG だけを再生成します。`--sign-zone` を指定した場合は、未署名ゾーンに NSEC/NSEC3 を生成してからゾーン全体を署名し、その後に NSEC/NSEC3 を壊して変更対象 RRset の RRSIG だけを再生成します。`--key-directory` を使う場合は、`ldns-keygen` で生成した対応アルゴリズム（RSASHA256、ECDSAP256SHA256、ED25519、ED448）の `.key` と、同じベース名の `.private` を同じディレクトリに配置してください。
+
+`nsec3-* --sign-zone` は、dnspython の RRset 署名機能を使って NSEC3 専用の署名済みゾーンを作り、NSEC は生成しません。DNSKEY と NSEC3PARAM を用意してから、署名後に存在する型をビットマップに反映します。empty non-terminal（配下の名前は存在するが、その名前自身にはレコードがない名前）も NSEC3 の対象に含め、委任先の glue や委任配下のデータは署名・ハッシュ化しません。委任の NS 自体は署名せず、DS がある場合だけ DS を署名します。
+
+NSEC3PARAM がなければ、SHA-1、反復回数 0、salt なしを使用します。既存の NSEC3PARAM が 1 レコードあれば、そのアルゴリズム・反復回数・salt を使います。再署名時は古い NSEC/NSEC3 と RRSIG を取り除いて証明チェーンを作り直します。`nsec3-optout-cover-mismatch --sign-zone` では DS のない委任のハッシュを省略し、Opt-Out フラグ付きの範囲を生成します。
 
 `nsec-cover-mismatch` と `nsec3-cover-mismatch` は、存在しない名前に対する NXDOMAIN 応答のカバー範囲を壊します。`nsec3-optout-cover-mismatch` は、未署名委任への DS 問い合わせで使う Opt-Out 不在証明を壊します。AAAA レコードだけが存在する名前への A 問い合わせのような NODATA 応答には、`*-type-bitmap-mismatch` を使います。対象名のビットマップに A を追加すると、権威サーバーの A/NODATA 応答と不在証明が矛盾します。
 
@@ -132,6 +137,19 @@ NSEC3 署名済みゾーンを対象にする場合は、同じ対象名に `--m
 
 Opt-Out NSEC3 のカバー範囲を壊す場合は、`--mode nsec3-optout-cover-mismatch` を指定します。対象名は、変更対象となる Opt-Out NSEC3 が実際に覆う名前にしてください。
 
+例えば未署名の入力ゾーンに `unsigned IN NS ns.example.test.`（DS なし）がある場合、Python 単体でも次のように署名・加工できます。`ldns-signzone` は不要です。
+
+```bash
+.venv/bin/python corrupt_zone.py \
+  --input optout.example.test.zone \
+  --output optout.example.test.zone.signed \
+  --origin optout.example.test. \
+  --mode nsec3-optout-cover-mismatch \
+  --target-name unsigned \
+  --key-directory /path/to/keys \
+  --sign-zone
+```
+
 Opt-Out の未署名委任とは別に、AAAA レコードだけを持つ `aaaa.nsec3.error.example.test.` の A/NODATA 不在証明を壊すには、次のように実行します。
 
 ```bash
@@ -155,6 +173,8 @@ NSEC/NSEC3 のカバー範囲、NODATA 型ビットマップ、NSEC3 Opt-Out の
 ```bash
 .venv/bin/python -m unittest -v test_corrupt_zone.py
 ```
+
+テストでは、正常な NSEC3 ゾーンの循環チェーン、型ビットマップ、empty non-terminal、委任・glue の扱いと署名を確認してから、加工後も全署名が有効で、指定した NSEC3 RRset だけが変更されることを確認します。署名は対応する 4 アルゴリズムで検証します。`ldns-verify-zone` がある場合は、正常系のゾーン構造を独立した実装でも確認します。
 
 ## 補助シェルスクリプト
 
