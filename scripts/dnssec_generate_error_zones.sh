@@ -10,6 +10,7 @@ base_zone_file=${1:-dnssec-check.jp.zone}
 zone_origin=${base_zone_file%.zone}
 script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
 key_directory=${DNSSEC_KEY_DIR:-../keys}
+python=${PYTHON:-python3}
 
 printf '\n%s\n' "Create the zone files from a template."
 sh "$script_dir/dnssec_make_error_zonefiles.sh" "$base_zone_file"
@@ -22,6 +23,10 @@ sh "$script_dir/dnssec_corrupt_child_zone.sh" "$base_zone_file"
 
 printf '\n%s\n' "Copy the parent zone template."
 cp -p "template.$base_zone_file" "$base_zone_file"
+
+printf '\n%s\n' "Add child-zone DS records."
+"$python" "$script_dir/dnssec_add_ds_records.py" \
+	"$base_zone_file" "$zone_origin" "$key_directory"
 
 printf '\n%s\n' "Change the DS Key Tag and hash value."
 sh "$script_dir/dnssec_corrupt_parent_zone.sh" "$base_zone_file" ds-keytag-mismatch
