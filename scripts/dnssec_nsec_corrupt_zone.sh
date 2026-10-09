@@ -88,14 +88,14 @@ script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
 python=${PYTHON:-python3}
 
 if [ "$add_target_type" -eq 1 ]; then
-	"$python" "$script_dir/corrupt_zone.py" \
+	"$python" "$script_dir/../corrupt_zone.py" \
 		-i "$signed_zone_file" -o "$signed_zone_file.out" \
 		-d "$zone_origin" -m "$mode" \
 		--target-name "$target_name_prefix" \
 		--zsk-private-key "$zsk_base.private" \
 		--target-type A
 else
-	"$python" "$script_dir/corrupt_zone.py" \
+	"$python" "$script_dir/../corrupt_zone.py" \
 		-i "$signed_zone_file" -o "$signed_zone_file.out" \
 		-d "$zone_origin" -m "$mode" \
 		--target-name "$target_name_prefix" \
