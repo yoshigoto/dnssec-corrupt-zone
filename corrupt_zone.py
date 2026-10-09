@@ -194,11 +194,11 @@ def name_is_covered(
         return owner < target < next_name
     if owner > next_name:
         return target > owner or target < next_name
-    return False
+    return target != owner
 
 
-def alter_nsec_coverage(rdata: dns.rdata.Rdata, owner: dns.name.Name) -> dns.rdata.Rdata:
-    return rdata.replace(next=owner)
+def alter_nsec_coverage(rdata: dns.rdata.Rdata, target: dns.name.Name) -> dns.rdata.Rdata:
+    return rdata.replace(next=target)
 
 
 def nsec3_hash_from_owner(owner: dns.name.Name) -> bytes:
@@ -611,12 +611,13 @@ def modify_nsec_coverage(zone: dns.zone.Zone, target_name: str) -> int:
                 continue
             original = list(rdataset)
             matching = [
-                name_is_covered(absolute_owner, rdata.next, target) for rdata in original
+                name_is_covered(absolute_owner, rdata.next.derelativize(zone.origin), target)
+                for rdata in original
             ]
             if any(matching):
                 rdataset.clear()
                 for rdata, matches in zip(original, matching):
-                    rdataset.add(alter_nsec_coverage(rdata, absolute_owner) if matches else rdata)
+                    rdataset.add(alter_nsec_coverage(rdata, target) if matches else rdata)
                 return sum(matching)
     return 0
 
@@ -633,6 +634,13 @@ def modify_nsec3_coverage(
             if rdataset.rdclass != IN or rdataset.rdtype != dns.rdatatype.NSEC3:
                 continue
             original = list(rdataset)
+            hashed_targets = [
+                dns.name.from_text(
+                    dns.dnssec.nsec3_hash(target, rdata.salt, rdata.iterations, rdata.algorithm),
+                    zone.origin,
+                )
+                for rdata in original
+            ]
             matching = [
                 (
                     not require_opt_out or rdata.flags & 0x01
@@ -640,20 +648,15 @@ def modify_nsec3_coverage(
                 and name_is_covered(
                     absolute_owner,
                     rdata.next_name(zone.origin),
-                    dns.name.from_text(
-                        dns.dnssec.nsec3_hash(
-                            target, rdata.salt, rdata.iterations, rdata.algorithm
-                        ),
-                        zone.origin,
-                    ),
+                    hashed_target,
                 )
-                for rdata in original
+                for rdata, hashed_target in zip(original, hashed_targets)
             ]
             if any(matching):
                 rdataset.clear()
-                for rdata, matches in zip(original, matching):
+                for rdata, hashed_target, matches in zip(original, hashed_targets, matching):
                     rdataset.add(
-                        rdata.replace(next=nsec3_hash_from_owner(absolute_owner))
+                        rdata.replace(next=nsec3_hash_from_owner(hashed_target))
                         if matches
                         else rdata
                     )

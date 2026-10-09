@@ -25,7 +25,7 @@ for algorithm in $signing_algorithms; do
 	zone_file="sign.dnskey.error.$algorithm.$base_zone_name"
 	zone_origin=${zone_file%.zone}
 	printf 'Target: %s / %s\n' "$zone_file" "$zone_origin"
-	"$python" "$script_dir/corrupt_zone.py" \
+	"$python" "$script_dir/../corrupt_zone.py" \
 		-i "$zone_file" -o "$zone_file.signed" \
 		-m dnskey-rrsig-corrupt -d "$zone_origin" \
 		--sign-zone --key-directory "$key_directory"
@@ -33,7 +33,7 @@ for algorithm in $signing_algorithms; do
 	zone_file="expire.dnskey.error.$algorithm.$base_zone_name"
 	zone_origin=${zone_file%.zone}
 	printf 'Target: %s / %s\n' "$zone_file" "$zone_origin"
-	"$python" "$script_dir/corrupt_zone.py" \
+	"$python" "$script_dir/../corrupt_zone.py" \
 		-i "$zone_file" -o "$zone_file.signed" \
 		-m dnskey-rrsig-expired -d "$zone_origin" \
 		--sign-zone --key-directory "$key_directory"
@@ -41,7 +41,7 @@ for algorithm in $signing_algorithms; do
 	zone_file="sign.a.error.$algorithm.$base_zone_name"
 	zone_origin=${zone_file%.zone}
 	printf 'Target: %s / %s\n' "$zone_file" "$zone_origin"
-	"$python" "$script_dir/corrupt_zone.py" \
+	"$python" "$script_dir/../corrupt_zone.py" \
 		-i "$zone_file" -o "$zone_file.signed" \
 		-m a-rrsig-corrupt -d "$zone_origin" \
 		--sign-zone --key-directory "$key_directory" \

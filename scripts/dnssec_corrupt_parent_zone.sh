@@ -29,7 +29,7 @@ signing_algorithms="rsasha256 ecdsap256sha256 ed25519 ed448"
 for algorithm in $signing_algorithms; do
 	printf 'Target: %s / %s / %s.%s\n' \
 		"$zone_file" "$zone_origin" "$target_name_prefix" "$algorithm"
-	"$python" "$script_dir/corrupt_zone.py" \
+	"$python" "$script_dir/../corrupt_zone.py" \
 		-i "$zone_file" -o "$temporary_file" \
 		-m "$mode" -d "$zone_origin" \
 		-t "$target_name_prefix.$algorithm"

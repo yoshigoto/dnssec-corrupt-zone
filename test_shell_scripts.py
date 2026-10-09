@@ -36,6 +36,8 @@ command = Path(sys.argv[0]).name
 with open(os.environ["COMMAND_LOG"], "a") as log:
     log.write(json.dumps([command, arguments]) + "\\n")
 if command == "python-stub":
+    if not Path(arguments[0]).is_file():
+        sys.exit(f"Python script not found: {{arguments[0]}}")
     if arguments[0].endswith("dnssec_add_ds_records.py"):
         os.execv(sys.executable, [sys.executable, *arguments])
     shutil.copyfile(arguments[arguments.index("-i") + 1],
@@ -120,6 +122,9 @@ else:
                 continue
             if arguments[0].endswith("dnssec_add_ds_records.py"):
                 continue
+            self.assertEqual(
+                Path(arguments[0]).resolve(), SCRIPTS.parent / "corrupt_zone.py"
+            )
             source = Path(arguments[arguments.index("-i") + 1])
             expected_origin = source.name.removesuffix(".signed").removesuffix(".zone")
             self.assertEqual(arguments[arguments.index("-d") + 1], expected_origin)

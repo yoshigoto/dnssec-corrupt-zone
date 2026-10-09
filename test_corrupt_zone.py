@@ -169,6 +169,32 @@ class CorruptZoneTests(unittest.TestCase):
         soa = self._rdata_at(zone, "@", dns.rdatatype.SOA)
         self.assertEqual(getattr(soa, "serial"), 0)
 
+    def test_name_is_covered_handles_circular_intervals(self) -> None:
+        cases = [
+            ("a", "z", "m", True),
+            ("a", "z", "a", False),
+            ("a", "z", "z", False),
+            ("a", "z", "zz", False),
+            ("z", "a", "zz", True),
+            ("z", "a", "0", True),
+            ("z", "a", "m", False),
+            ("z", "a", "z", False),
+            ("z", "a", "a", False),
+            ("a", "a", "m", True),
+            ("a", "a", "0", True),
+            ("a", "a", "a", False),
+        ]
+        for owner, next_name, target, expected in cases:
+            with self.subTest(owner=owner, next_name=next_name, target=target):
+                self.assertEqual(
+                    corrupt_zone.name_is_covered(
+                        dns.name.from_text(owner, ORIGIN),
+                        dns.name.from_text(next_name, ORIGIN),
+                        dns.name.from_text(target, ORIGIN),
+                    ),
+                    expected,
+                )
+
     def test_nsec_coverage_mismatch(self) -> None:
         zone = dns.zone.from_text(
             "a 300 IN NSEC z.example. A\nz 300 IN NSEC a.example. A",
@@ -180,7 +206,41 @@ class CorruptZoneTests(unittest.TestCase):
         self.assertEqual(corrupt_zone.modify_nsec_coverage(zone, "m.example."), 1)
 
         nsec = self._rdata_at(zone, "a", dns.rdatatype.NSEC)
-        self.assertEqual(getattr(nsec, "next"), dns.name.from_text("a.example."))
+        self.assertEqual(getattr(nsec, "next"), dns.name.from_text("m.example."))
+        self.assertFalse(
+            corrupt_zone.name_is_covered(
+                dns.name.from_text("a.example."),
+                nsec.next,
+                dns.name.from_text("m.example."),
+            )
+        )
+        self.assertEqual(
+            self._rdata_at(zone, "z", dns.rdatatype.NSEC).next.derelativize(ORIGIN),
+            dns.name.from_text("a.example."),
+        )
+
+    def test_nsec_coverage_mismatch_handles_wraparound_and_self_loop(self) -> None:
+        for owner, next_name, target in [
+            ("z", "a", "zz"),
+            ("z", "a", "0"),
+            ("a", "a", "m"),
+        ]:
+            with self.subTest(owner=owner, next_name=next_name, target=target):
+                zone = dns.zone.from_text(
+                    f"{owner} 300 IN NSEC {next_name}.example. A",
+                    origin=ORIGIN,
+                    relativize=True,
+                    check_origin=False,
+                )
+                self.assertEqual(corrupt_zone.modify_nsec_coverage(zone, target), 1)
+                nsec = self._rdata_at(zone, owner, dns.rdatatype.NSEC)
+                absolute_target = dns.name.from_text(target, ORIGIN)
+                self.assertEqual(nsec.next, absolute_target)
+                self.assertFalse(
+                    corrupt_zone.name_is_covered(
+                        dns.name.from_text(owner, ORIGIN), nsec.next, absolute_target
+                    )
+                )
 
     def test_nsec_type_bitmap_mismatch(self) -> None:
         zone = dns.zone.from_text(
@@ -204,7 +264,50 @@ class CorruptZoneTests(unittest.TestCase):
         self.assertEqual(corrupt_zone.modify_nsec3_coverage(zone, "missing.example."), 1)
 
         nsec3 = self._rdata_at(zone, "00000000000000000000000000000000", dns.rdatatype.NSEC3)
-        self.assertEqual(getattr(nsec3, "next"), bytes(20))
+        target_hash = dns.dnssec.nsec3_hash("missing.example.", b"", 0, 1)
+        self.assertEqual(nsec3.next, base64.b32hexdecode(target_hash))
+        self.assertFalse(
+            corrupt_zone.name_is_covered(
+                dns.name.from_text("00000000000000000000000000000000", ORIGIN),
+                nsec3.next_name(ORIGIN),
+                dns.name.from_text(target_hash, ORIGIN),
+            )
+        )
+
+    def test_nsec3_coverage_mismatch_preserves_parameters_and_handles_self_loop(self) -> None:
+        for owner_hash, next_hash in [
+            (bytes(20), b"\xff" * 20),
+            (b"\xff" * 20, b"\xfe" * 20),
+            (bytes(20), bytes(20)),
+        ]:
+            for flags in (0, 1):
+                with self.subTest(owner_hash=owner_hash, next_hash=next_hash, flags=flags):
+                    owner = base64.b32hexencode(owner_hash).decode("ascii").lower()
+                    next_name = base64.b32hexencode(next_hash).decode("ascii")
+                    zone = dns.zone.from_text(
+                        f"{owner} 300 IN NSEC3 1 {flags} 2 AABB {next_name} AAAA RRSIG",
+                        origin=ORIGIN,
+                        relativize=True,
+                        check_origin=False,
+                    )
+                    original = self._rdata_at(zone, owner, dns.rdatatype.NSEC3)
+                    self.assertEqual(
+                        corrupt_zone.modify_nsec3_coverage(
+                            zone, "missing", require_opt_out=bool(flags)
+                        ),
+                        1,
+                    )
+                    nsec3 = self._rdata_at(zone, owner, dns.rdatatype.NSEC3)
+                    target_hash = dns.dnssec.nsec3_hash("missing.example.", b"\xaa\xbb", 2, 1)
+                    self.assertEqual(nsec3.next, base64.b32hexdecode(target_hash))
+                    self.assertEqual(nsec3, original.replace(next=nsec3.next))
+                    self.assertFalse(
+                        corrupt_zone.name_is_covered(
+                            dns.name.from_text(owner, ORIGIN),
+                            nsec3.next_name(ORIGIN),
+                            dns.name.from_text(target_hash, ORIGIN),
+                        )
+                    )
 
     def test_nsec3_optout_coverage_mismatch_requires_optout(self) -> None:
         without_optout = self._nsec3_coverage_zone(flags=0)
@@ -222,6 +325,64 @@ class CorruptZoneTests(unittest.TestCase):
             ),
             1,
         )
+
+    def test_resign_changed_nsec3_coverage_preserves_other_signatures(self) -> None:
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        dnskey = dns.dnssec.make_dnskey(private_key.public_key(), 13, flags=256)
+        for flags in (0, 1):
+            with self.subTest(flags=flags):
+                zone = self._nsec3_coverage_zone(flags)
+                zone_text = (
+                    f"@ 300 IN DNSKEY {dnskey.to_text()}\n"
+                    f"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV 300 IN NSEC3 1 {flags} 0 - "
+                    "00000000000000000000000000000000 A RRSIG\n"
+                )
+                extra = dns.zone.from_text(
+                    zone_text, origin=ORIGIN, relativize=True, check_origin=False
+                )
+                zone.nodes.update(extra.nodes)
+                original_signatures = {}
+                for owner, node in list(zone.nodes.items()):
+                    rdataset = node.get_rdataset(corrupt_zone.IN, dns.rdatatype.NSEC3)
+                    if rdataset is None:
+                        continue
+                    signature = dns.dnssec.sign(
+                        (owner.derelativize(ORIGIN), rdataset),
+                        private_key, ORIGIN, dnskey, lifetime=300, origin=ORIGIN,
+                    )
+                    original_signatures[owner] = signature
+                    corrupt_zone.add_rdataset(zone, owner, dns.rdatatype.RRSIG, signature)
+                before = corrupt_zone.denial_rrset_snapshot(zone, dns.rdatatype.NSEC3)
+                mode = "nsec3-optout-cover-mismatch" if flags else "nsec3-cover-mismatch"
+                self.assertEqual(
+                    corrupt_zone.modify_nsec3_coverage(
+                        zone, "missing", require_opt_out=bool(flags)
+                    ),
+                    1,
+                )
+                with TemporaryDirectory() as directory:
+                    key_path = Path(directory) / "zsk.private"
+                    key_path.write_text(self._ldns_private_file(private_key, algorithm=13))
+                    self.assertEqual(
+                        corrupt_zone.resign_changed_denial_rrsets(zone, mode, key_path, before),
+                        1,
+                    )
+                for owner, original_signature in original_signatures.items():
+                    node = zone.nodes[owner]
+                    rdataset = node.get_rdataset(corrupt_zone.IN, dns.rdatatype.NSEC3)
+                    signatures = node.get_rdataset(
+                        corrupt_zone.IN, dns.rdatatype.RRSIG, dns.rdatatype.NSEC3
+                    )
+                    dns.dnssec.validate(
+                        (owner.derelativize(ORIGIN), rdataset),
+                        (owner.derelativize(ORIGIN), signatures),
+                        {ORIGIN: zone.get_rdataset(ORIGIN, dns.rdatatype.DNSKEY)},
+                        origin=ORIGIN,
+                    )
+                    if str(owner) == "00000000000000000000000000000000":
+                        self.assertNotEqual(signatures[0], original_signature)
+                    else:
+                        self.assertEqual(signatures[0], original_signature)
 
     def test_nsec3_type_bitmap_mismatch(self) -> None:
         target_name = "aaaa.example."
@@ -541,8 +702,16 @@ class CorruptZoneTests(unittest.TestCase):
             if nsec_rdataset is None:
                 continue
             absolute_owner = owner.derelativize(ORIGIN)
+            self.assertFalse(any(
+                corrupt_zone.name_is_covered(
+                    absolute_owner, nsec.next.derelativize(ORIGIN),
+                    dns.name.from_text("missing.example."),
+                )
+                for nsec in nsec_rdataset
+            ))
             if any(
-                getattr(nsec, "next").derelativize(ORIGIN) == absolute_owner
+                getattr(nsec, "next").derelativize(ORIGIN)
+                == dns.name.from_text("missing.example.")
                 for nsec in nsec_rdataset
             ):
                 rrsig_rdataset = next(
@@ -741,8 +910,16 @@ class CorruptZoneTests(unittest.TestCase):
                     if nsec_rdataset is None:
                         continue
                     absolute_owner = owner.derelativize(ORIGIN)
+                    self.assertFalse(any(
+                        corrupt_zone.name_is_covered(
+                            absolute_owner, nsec.next.derelativize(ORIGIN),
+                            dns.name.from_text("missing.example."),
+                        )
+                        for nsec in nsec_rdataset
+                    ))
                     if any(
-                        getattr(nsec, "next").derelativize(ORIGIN) == absolute_owner
+                        getattr(nsec, "next").derelativize(ORIGIN)
+                        == dns.name.from_text("missing.example.")
                         for nsec in nsec_rdataset
                     ):
                         rrsig_rdataset = next(
