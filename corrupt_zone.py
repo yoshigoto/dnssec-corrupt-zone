@@ -96,6 +96,11 @@ def parse_args() -> argparse.Namespace:
         help="加工後のゾーン全体を dnspython で署名する",
     )
     parser.add_argument(
+        "--sign-only",
+        action="store_true",
+        help="--sign-zone の署名後加工を行わず、署名済みゾーンを出力する",
+    )
+    parser.add_argument(
         "--nsec3-iterations",
         type=int,
         help="--sign-zone の NSEC3 署名で使う反復回数",
@@ -976,6 +981,20 @@ def zsk_private_key_from_args(
     return find_ldns_signing_keys(args.key_directory, args.input, zone.origin).zsk.private_path
 
 
+def validate_optout_delegation(
+    zone: dns.zone.Zone, target: dns.name.Name
+) -> None:
+    if zone.origin is None:
+        raise ValueError("ゾーンオリジンがありません")
+    if target == zone.origin or not target.is_subdomain(zone.origin):
+        raise ValueError(f"Opt-Out target must be a child delegation: {target}")
+    node = zone.get_node(target)
+    if node is None or node.get_rdataset(IN, dns.rdatatype.NS) is None:
+        raise ValueError(f"Unsigned NS delegation not found: {target}")
+    if node.get_rdataset(IN, dns.rdatatype.DS) is not None:
+        raise ValueError(f"Opt-Out delegation must not have DS records: {target}")
+
+
 def main() -> None:
     args = parse_args()
     origin = make_absolute_name(args.origin, dns.name.root)
@@ -988,6 +1007,12 @@ def main() -> None:
     post_sign_modify = args.sign_zone and args.mode in POST_SIGN_MODES
 
     try:
+        if args.mode == "nsec3-optout-cover-mismatch":
+            if args.target_name is None:
+                raise ValueError("Opt-Out モードでは --target-name が必要です")
+            validate_optout_delegation(
+                zone, make_absolute_name(args.target_name, origin)
+            )
         if args.nsec3_iterations is not None and not 0 <= args.nsec3_iterations <= 65535:
             raise ValueError("NSEC3 反復回数は 0 以上 65535 以下にしてください")
         if args.nsec3_salt is not None and (
@@ -1000,6 +1025,10 @@ def main() -> None:
             not args.sign_zone or not args.mode.startswith("nsec3-")
         ):
             raise ValueError("--nsec3-iterations/--nsec3-salt は nsec3-* --sign-zone と併用してください")
+        if args.sign_only and (
+            not args.sign_zone or args.mode not in POST_SIGN_MODES
+        ):
+            raise ValueError("--sign-only は署名後に加工するモードと --sign-zone の併用が必要です")
         nsec3_salt = (
             bytes.fromhex(args.nsec3_salt)
             if args.nsec3_salt is not None
@@ -1043,7 +1072,7 @@ def main() -> None:
                 zone, args.input, args.key_directory, args.mode,
                 args.nsec3_iterations, nsec3_salt,
             )
-            if post_sign_modify:
+            if post_sign_modify and not args.sign_only:
                 before_denial = (
                     denial_rrset_snapshot(zone, required_denial_type(args.mode))
                     if required_denial_type(args.mode) is not None
@@ -1062,7 +1091,7 @@ def main() -> None:
         except (OSError, ValueError, dns.exception.DNSException) as error:
             raise SystemExit(str(error)) from error
 
-    if args.mode != "success" and post_sign_modify and not changed:
+    if args.mode != "success" and post_sign_modify and not changed and not args.sign_only:
         raise SystemExit(f"対象レコードが見つかりませんでした: {MODES[args.mode]}")
 
     save_zone(zone, args.output, sorted_names=True, relativize=False, want_origin=True, chunksize=0)

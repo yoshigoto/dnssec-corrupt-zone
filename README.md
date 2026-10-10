@@ -44,6 +44,7 @@ uv pip install --python .venv/bin/python -r requirements.txt
 | `--zsk-private-key` | `nsec-*` モードで変更した NSEC/NSEC3 RRset を再署名する ZSK の `.private` ファイル (RSASHA256 (8)、ECDSAP256SHA256 (13)、ED25519 (15)、ED448 (16))。省略時は `--key-directory` から自動選択 |
 | `--key-directory`, `-k` | `ldns-keygen` 形式の KSK/ZSK 鍵ファイルがあるディレクトリ。ゾーンファイル名から `K<zone>.+<algorithm>+<keytag>.key` を探し、DNSKEY フラグ 257 を KSK、256 を ZSK として選択する。対応する秘密鍵は `.key` と同じベース名に `.private` を付けたファイルを使う |
 | `--sign-zone` | dnspython でゾーン全体を署名する。`ds-keytag-mismatch` と `ds-hash-mismatch` は加工後に署名し、`ds-rrsig-corrupt`、`dnskey-rrsig-*`、`nsec-*` は署名後に加工する |
+| `--sign-only` | `--sign-zone` と署名後加工モードを併用し、署名のみ行う。補助スクリプトが署名済みファイルを保存してから別工程で加工する場合に使う |
 | `--nsec3-iterations` | `nsec3-* --sign-zone` の署名時に使う NSEC3 反復回数 (0〜65535)。省略時は既存の `NSEC3PARAM`、なければ 0 |
 | `--nsec3-salt` | `nsec3-* --sign-zone` の署名時に使う偶数桁の16進 salt (最大255バイト)。省略時は既存の `NSEC3PARAM`、なければ salt なし。salt なしを明示する場合は空文字列を指定 |
 
@@ -196,12 +197,11 @@ Opt-Out の未署名委任とは別に、AAAA レコードだけを持つ `aaaa.
 | [`dnssec_generate_error_zones.sh`](scripts/dnssec_generate_error_zones.sh) | 一括実行。テンプレートからゾーンを生成し、子ゾーン署名・加工、親ゾーンへの DS 追加・加工・署名、NSEC/NSEC3 ケース作成まで行う。`--key-dir`、`--template-dir`、`--output-dir` で各ディレクトリを指定する |
 | [`dnssec_make_error_zonefiles.sh`](scripts/dnssec_make_error_zonefiles.sh) | テンプレートから親・子の未署名ゾーンファイルだけを生成する。署名や DS 追加はしない。`--template-dir`、`--output-dir` を指定できる |
 | [`dnssec_sign_child_zones.sh`](scripts/dnssec_sign_child_zones.sh) | 指定したベースゾーン名に一致する子ゾーンファイルを一括署名し、各入力に `.signed` を付けたファイルを作る。テンプレートは署名対象外 |
-| [`dnssec_sign_zone.sh`](scripts/dnssec_sign_zone.sh) | 1つのゾーンファイルを `ldns-signzone` で署名し、入力ファイル名に `.signed` を付けて出力する |
+| [`dnssec_sign_zone.sh`](scripts/dnssec_sign_zone.sh) | 1つのゾーンファイルを `corrupt_zone.py` で署名し、入力ファイル名に `.signed` を付けて出力する |
 | [`dnssec_corrupt_child_zone.sh`](scripts/dnssec_corrupt_child_zone.sh) | 対応する子ゾーンの DNSKEY 署名破損・期限切れ、または A 署名破損のファイルを作成する。テンプレートディレクトリを第2引数に指定できる |
 | [`dnssec_corrupt_parent_zone.sh`](scripts/dnssec_corrupt_parent_zone.sh) | 親ゾーンファイルを指定モード（`ds-keytag-mismatch`、`ds-hash-mismatch`、`ds-rrsig-corrupt`）で加工し、入力ファイルを更新する |
 | [`dnssec_nsec_corrupt_zone.sh`](scripts/dnssec_nsec_corrupt_zone.sh) | NSEC/NSEC3 ケースを署名・加工する。型ビットマップ用に `--target-type`、NSEC3 用に `--nsec3-iterations`、`--nsec3-salt` を指定できる。既存の `.signed` は `.signed.orig` に退避される |
 | [`dnssec_add_ds_records.py`](scripts/dnssec_add_ds_records.py) | 親ゾーン内の NS 委任を確認し、鍵ディレクトリの `.ds` ファイルから DS を追加する。親ゾーンファイルを直接更新する |
-| [`dnssec_sign_optout_zone.py`](scripts/dnssec_sign_optout_zone.py) | Opt-Out 署名の内部処理用。未署名委任のハッシュを省略して署名する。通常は `dnssec_nsec_corrupt_zone.sh` から呼び出される |
 
 作業ディレクトリは任意で、例えば一括生成は次のように実行できます。
 
@@ -215,7 +215,7 @@ PYTHON=.venv/bin/python \
 
 独自のテンプレートディレクトリには、`template.<base-zone>.zone`（親）、`template.algorithm.<base-zone>.zone`（通常の子）、`template.optout.algorithm.<base-zone>.zone`（Opt-Out 用の子）を用意してください。Opt-Out 用テンプレートには、`unsigned` という名前の NS 委任を置き、DS は置きません。
 
-`PYTHON` は Python 実行ファイル、`--key-dir DIR` は鍵ディレクトリを指定します。鍵ディレクトリは環境変数 `DNSSEC_KEY_DIR` でも指定でき、`--key-dir` が優先されます。どちらも未指定の場合は、実行時のカレントディレクトリから見た `../keys` です。Python の既定値は `python3` です。スクリプト本体と `corrupt_zone.py` はスクリプトの配置場所を基準に検索します。個別の署名スクリプトでは `DNSSEC_ZONE_DIR` でゾーンディレクトリも指定できます。署名スクリプトの実行には `ldns-signzone` が PATH 上に必要です。
+`PYTHON` は Python 実行ファイル、`--key-dir DIR` は鍵ディレクトリを指定します。鍵ディレクトリは環境変数 `DNSSEC_KEY_DIR` でも指定でき、`--key-dir` が優先されます。どちらも未指定の場合は、実行時のカレントディレクトリから見た `../keys` です。Python の既定値は `python3` です。スクリプト本体と `corrupt_zone.py` はスクリプトの配置場所を基準に検索します。個別の署名スクリプトでは `DNSSEC_ZONE_DIR` でゾーンディレクトリも指定できます。署名処理は dnspython と cryptography で行います。
 
 `dnssec_make_error_zonefiles.sh` は NSEC と NSEC3 の型ビットマップ不整合について、A に加えて MX と TXT の問い合わせ型を使うゾーンファイルも生成します。NSEC3 のカバー不成立、型ビットマップ不整合、Opt-Out カバー不成立には、次の4つのパラメーター組み合わせを持つゾーンも生成します。
 
@@ -226,7 +226,7 @@ PYTHON=.venv/bin/python \
 | `iter1.nosalt` | 1 | なし |
 | `iter1.saltA1B2` | 1 | `A1B2` |
 
-例えば `cover.mismatch.nsec3.iter1.saltA1B2.rsasha256.<zone>.zone` は、反復回数 1、salt `A1B2` の NSEC3 ゾーンにカバー不成立を作ります。`iter1.nosalt` は `ldns-signzone` の既定値（反復回数 1、salt なし）に対応します。`dnssec_generate_error_zones.sh` で署名・DS 追加まで行う場合、追加された委任先それぞれについても、通常と同じ形式の `.key`、`.private`、`.ds` ファイルが鍵ディレクトリに必要です。単に未署名のゾーンファイルを作る場合は `dnssec_make_error_zonefiles.sh` を使ってください。
+例えば `cover.mismatch.nsec3.iter1.saltA1B2.rsasha256.<zone>.zone` は、反復回数 1、salt `A1B2` の NSEC3 ゾーンにカバー不成立を作ります。`iter1.nosalt` は反復回数 1、salt なしの設定です。`dnssec_generate_error_zones.sh` で署名・DS 追加まで行う場合、追加された委任先それぞれについても、通常と同じ形式の `.key`、`.private`、`.ds` ファイルが鍵ディレクトリに必要です。単に未署名のゾーンファイルを作る場合は `dnssec_make_error_zonefiles.sh` を使ってください。
 
 `dnssec_nsec_corrupt_zone.sh` では、`--target-type TYPE` でビットマップに追加する型を、`--nsec3-iterations COUNT` と `--nsec3-salt HEX` で NSEC3 の署名パラメーターを指定できます。salt は偶数桁の16進数です。例えば次の指定は反復回数 1、salt `A1B2` の NSEC3 ゾーンを作ります。
 
@@ -248,7 +248,7 @@ sh scripts/dnssec_nsec_corrupt_zone.sh \
 python3 -m unittest -v test_shell_scripts.py
 ```
 
-`ldns-keygen` と `ldns-signzone` がある場合は、実鍵で Opt-Out ゾーンを署名・加工し、対象のハッシュが省略されていること、変更した NSEC3 とその RRSIG 以外が維持されることも検証します。これらのコマンドがない場合、その実鍵テストだけスキップします。
+`ldns-keygen` がある場合は、それで作った実鍵を使って Opt-Out ゾーンを署名・加工し、対象のハッシュが省略されていること、変更した NSEC3 とその RRSIG 以外が維持されることも検証します。コマンドがない場合、その実鍵テストだけスキップします。
 
 ## テスト
 
@@ -272,7 +272,7 @@ dnssec-check.jp.
 
 未署名委任 `unsigned` は存在しますが、Opt-Out ではその名前に一致する NSEC3 を省略できます。その代わり、`unsigned` のハッシュを覆う NSEC3 に Opt-Out フラグを立てます。これにより、バリデータは「この範囲には DS のない未署名委任があり得る」と判断でき、`unsigned` への DS 問い合わせの不在証明を検証できます。通常の存在しない名前に対する NXDOMAIN や、AAAA だけの名前への A/NODATA とは異なるケースです。
 
-`ldns-signzone -n -p` はフラグを立てますが、未署名委任のハッシュを省略しません。そのため [dnssec_sign_optout_zone.py](scripts/dnssec_sign_optout_zone.py) は、委任とその配下のレコードをいったん署名対象から外して NSEC3 を生成し、その後に元の委任レコードを戻します。委任の NS や glue は署名しません。この専用処理には、署名前のゾーンを渡してください。
+`nsec3-optout-cover-mismatch --sign-zone` は Python で Opt-Out NSEC3 チェーンを生成し、DS のない委任のハッシュを省略します。委任の NS や glue は署名しません。`dnssec_nsec_corrupt_zone.sh` は `--sign-only` で有効な署名済みファイルを保存した後、対象 NSEC3 とその RRSIG だけを加工・再署名します。
 
 続いて `nsec3-optout-cover-mismatch` が、`unsigned` を覆う Opt-Out NSEC3 の Next を `unsigned` 自身のハッシュに変更し、その NSEC3 RRset だけを再署名します。範囲の終端はカバー対象に含まれないため、DS 不在証明が成立しなくなります。署名そのものの検証失敗ではありません。
 
