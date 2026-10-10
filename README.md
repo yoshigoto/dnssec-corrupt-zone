@@ -51,22 +51,26 @@ SOA の Serial は入力値を保持し、このツールでは変更しませ�
 
 ## 検証ケース
 
-| `--mode` | 加工するゾーン | 内容 | dnssec-check.jp の対応パターン |
-| --- | --- | --- | --- |
-| `success` | 親または子 | 変更せず出力 | 成功パターン |
-| `ds-keytag-mismatch` | 親 | 委任先 `DS` の Key Tag を1増やす | Key Tag ミスマッチ |
-| `ds-hash-mismatch` | 親 | 委任先 `DS` の Digest の末尾 1バイトを反転する | ハッシュ値ミスマッチ |
-| `ds-rrsig-corrupt` | 親 | 委任先 `DS` の電子署名データである `RRSIG` の署名値を破損する | DS リソースレコードの検証失敗 |
-| `dnskey-rrsig-corrupt` | 子 | ゾーンの頂点の `DNSKEY` の電子署名データである `RRSIG` の署名値を破損する | DNSKEY リソースレコードの検証失敗 |
-| `dnskey-rrsig-expired` | 子 | ゾーンの頂点の `DNSKEY` の電子署名データである `RRSIG` の有効期限を `2010-01-01T00:00:00Z` にする | DNSKEY リソースレコードの検証失敗（有効期限切れ） |
-| `a-rrsig-corrupt` | 子 | 指定名の `A` の電子署名データである `RRSIG` の署名値を破損する | A リソースレコードの検証失敗 |
-| `nsec-cover-mismatch` | 子 | 指定名を覆う NSEC の Next Domain Name を指定名にして、指定名をカバーしない状態にする | 不在証明のカバー不成立 |
-| `nsec3-cover-mismatch` | 子 | 指定名を覆う NSEC3 の Next Hashed Owner Name を指定名のハッシュにして、指定名をカバーしない状態にする | 不在証明のカバー不成立 |
-| `nsec3-optout-cover-mismatch` | 子 | 指定名を覆う Opt-Out フラグ付き NSEC3 だけを対象に、カバー範囲を壊す | Opt-Out 不在証明のカバー不成立 |
-| `nsec-type-bitmap-mismatch` | 子 | 指定名の NSEC 型ビットマップに問い合わせ型を追加する | NODATA 不在証明の不整合 |
-| `nsec3-type-bitmap-mismatch` | 子 | 指定名の NSEC3 型ビットマップに問い合わせ型を追加する | NODATA 不在証明の不整合 |
+以下の「検証への影響」は、加工されたゾーンに対する DNSSEC 検証の結果です。NSEC/NSEC3 の不在証明ケースでは、署名値は正しいまま証明内容を不整合にし、署名の検証失敗とは区別できるようにしています。
 
-加工対象となる `DS` は親ゾーンのものであり、加工対象となる `RRSIG` は子ゾーンのものです。同じ委任先について複数の失敗パターンを公開する場合は、毎回、元の正常な署名済みゾーンから個別に出力してください。
+| `--mode` | ゾーン | 壊し方 | 検証への影響 | dnssec-check.jp の表示 |
+| --- | --- | --- | --- | --- |
+| `success` | 親または子 | レコードを変更しない | 他の不整合がなければ検証成功 | 成功パターン |
+| `ds-keytag-mismatch` | 親 | 委任先 `DS` の Key Tag を1増やす | `DS` が子の `DNSKEY` に一致せず、信頼の連鎖を確立できない | Key Tag ミスマッチ |
+| `ds-hash-mismatch` | 親 | 委任先 `DS` の Digest の末尾1バイトを反転する | `DS` が子の `DNSKEY` に一致せず、信頼の連鎖を確立できない | ハッシュ値ミスマッチ |
+| `ds-rrsig-corrupt` | 親 | `DS` を覆う `RRSIG` の署名値の末尾1バイトを反転する | 親ゾーンの `DS` RRset の署名検証に失敗する | DS リソースレコードの検証失敗 |
+| `dnskey-rrsig-corrupt` | 子 | ゾーン頂点の `DNSKEY` を覆う `RRSIG` の署名値の末尾1バイトを反転する | 子ゾーンの `DNSKEY` RRset の署名検証に失敗し、子の鍵を認証できない | DNSKEY リソースレコードの検証失敗 |
+| `dnskey-rrsig-expired` | 子 | ゾーン頂点の `DNSKEY` を覆う `RRSIG` の有効期限を `2010-01-01T00:00:00Z` にする | `DNSKEY` RRset の署名が期限切れとして拒否される | DNSKEY リソースレコードの検証失敗（有効期限切れ） |
+| `a-rrsig-corrupt` | 子 | 指定名の `A` を覆う `RRSIG` の署名値の末尾1バイトを反転する | 対象名の `A` RRset の署名検証に失敗する | A リソースレコードの検証失敗 |
+| `nsec-cover-mismatch` | 子 | 不在名を覆う NSEC の Next Domain Name をその不在名にする | 終端名は範囲に含まれないため、NXDOMAIN 等の不在証明が成立しない | 不在証明のカバー不成立 |
+| `nsec3-cover-mismatch` | 子 | 不在名を覆う NSEC3 の Next Hashed Owner Name をその不在名のハッシュにする | NXDOMAIN 等に必要な NSEC3 の不在証明が成立しない | 不在証明のカバー不成立 |
+| `nsec3-optout-cover-mismatch` | 子 | 対象名を覆う Opt-Out フラグ付き NSEC3 の Next を対象名のハッシュにする | DS のない委任について、DS 不在を示す Opt-Out 証明が成立しない | Opt-Out 不在証明のカバー不成立 |
+| `nsec-type-bitmap-mismatch` | 子 | 対象名の NSEC 型ビットマップに、存在しない問い合わせ型を追加する | 権威応答は NODATA なのにビットマップは型の存在を示すため、NODATA 証明が不整合になる | NODATA 不在証明の不整合 |
+| `nsec3-type-bitmap-mismatch` | 子 | 対象名の NSEC3 型ビットマップに、存在しない問い合わせ型を追加する | 権威応答は NODATA なのにビットマップは型の存在を示すため、NODATA 証明が不整合になる | NODATA 不在証明の不整合 |
+
+型ビットマップの既定の問い合わせ型は `A` です。例えば `AAAA` だけを持つ名前に対する A/NODATA を試す場合は、`--target-type A` を指定します。NXDOMAIN やワイルドカード応答の次に近い名前の不在証明を試す場合は、実際に問い合わせる名前を `--target-name` に指定して `*-cover-mismatch` を使います。
+
+加工対象となる `DS` は親ゾーンのものであり、加工対象となる `RRSIG` は子ゾーンのものです。同じ委任先について複数の失敗パターンを公開する場合は、毎回、加工前の正常なゾーンから始め、モードに応じた署名状態（DS 値の加工は署名前、`RRSIG` の加工は署名後）で処理してください。
 
 `nsec-*` モードを署名済みゾーンに対して実行する場合は、NSEC/NSEC3 の RDATA を変更した後、`--zsk-private-key` で指定した ZSK、または `--key-directory` から自動選択した ZSK を使って変更対象 RRset の RRSIG だけを再生成します。`--sign-zone` を指定した場合は、未署名ゾーンに NSEC/NSEC3 を生成してからゾーン全体を署名し、その後に NSEC/NSEC3 を壊して変更対象 RRset の RRSIG だけを再生成します。`--key-directory` を使う場合は、`ldns-keygen` で生成した対応アルゴリズム（RSASHA256、ECDSAP256SHA256、ED25519、ED448）の `.key` と、同じベース名の `.private` を同じディレクトリに配置してください。
 
@@ -74,11 +78,7 @@ SOA の Serial は入力値を保持し、このツールでは変更しませ�
 
 NSEC3PARAM がなければ、SHA-1、反復回数 0、salt なしを使用します。既存の NSEC3PARAM が 1 レコードあれば、そのアルゴリズム・反復回数・salt を使います。再署名時は古い NSEC/NSEC3 と RRSIG を取り除いて証明チェーンを作り直します。`nsec3-optout-cover-mismatch --sign-zone` では DS のない委任のハッシュを省略し、Opt-Out フラグ付きの範囲を生成します。
 
-`nsec-cover-mismatch` と `nsec3-cover-mismatch` は、存在しない名前に対する NXDOMAIN 応答のカバー範囲を壊します。`nsec3-optout-cover-mismatch` は、未署名委任への DS 問い合わせで使う Opt-Out 不在証明を壊します。AAAA レコードだけが存在する名前への A 問い合わせのような NODATA 応答には、`*-type-bitmap-mismatch` を使います。対象名のビットマップに A を追加すると、権威サーバーの A/NODATA 応答と不在証明が矛盾します。
-
-カバー範囲の終端は範囲に含まれないため、Next を指定名（NSEC3 では指定名のハッシュ）に変更します。Next を所有者自身にすると循環範囲が広がり、不在証明が検証成功する場合があるため、自己ループは使いません。変更対象 RRset の署名は再生成し、署名値ではなく不在証明の不整合を検証できるようにします。
-
-ワイルドカード応答の次に近い名前の不在証明も、実際に問い合わせる名前を `--target-name` に指定して `*-cover-mismatch` を使います。NSEC3 Opt-Out を使う委任ケースでは、`nsec3-optout-cover-mismatch` を指定してください。このモードは Opt-Out フラグを持つ NSEC3 が対象名を覆う場合だけ変更します。
+`nsec-cover-mismatch` と `nsec3-cover-mismatch` は、存在しない名前に対する NXDOMAIN 応答などで必要なカバー範囲を壊します。カバー範囲の終端は範囲に含まれないため、Next を指定名（NSEC3 では指定名のハッシュ）に変更します。Next を所有者自身にすると循環範囲が広がり、不在証明が検証成功する場合があるため、自己ループは使いません。変更対象 RRset の署名は再生成します。`nsec3-optout-cover-mismatch` は、Opt-Out フラグを持つ NSEC3 が対象名を覆う場合に限り、その DS 不在証明を壊します。
 
 ## 実行例
 
@@ -166,19 +166,42 @@ Opt-Out の未署名委任とは別に、AAAA レコードだけを持つ `aaaa.
 
 通常の NSEC ゾーンでは `--mode nsec-type-bitmap-mismatch` を指定します。`--target-type` は省略時に `A` となるため、上の例では省略可能です。
 
-## テスト
+## 親ゾーンの DS を加工する場合
 
-NSEC/NSEC3 のカバー範囲、NODATA 型ビットマップ、NSEC3 Opt-Out の加工は、次のコマンドで検証できます。
+一括生成スクリプトは、親ゾーンテンプレートから作った未署名ゾーンに DS を追加し、`ds-keytag-mismatch` と `ds-hash-mismatch` を適用してから親ゾーンを署名します。その後、署名済みゾーンに `ds-rrsig-corrupt` を適用します。通常はこのスクリプトに任せられるため、手作業での更新が必要な場合だけ以下の順序を使ってください。
+
+独自の署名手順を使う場合、Key Tag／Digest の加工は未署名ファイルに適用し、その後に親ゾーンを署名します。`ds-rrsig-corrupt` は署名済みファイルに適用してください。この加工後に再署名すると破損した署名が修復されます。
 
 ```bash
-.venv/bin/python -m unittest -v test_corrupt_zone.py
+# 未署名ゾーンの DS を加工（必要な加工をすべて行ってから署名）
+.venv/bin/python corrupt_zone.py -i example.test.zone -o example.test.zone.work1 -m ds-keytag-mismatch -d example.test. -t keytag.ds.error.example.test.
+.venv/bin/python corrupt_zone.py -i example.test.zone.work1 -o example.test.zone.work2 -m ds-hash-mismatch -d example.test. -t hash.ds.error.example.test.
+
+# example.test.zone.work2 を署名し、出力を example.test.zone.signed とした場合
+.venv/bin/python corrupt_zone.py -i example.test.zone.signed -o example.test.zone.final -m ds-rrsig-corrupt -d example.test. -t sign.ds.error.example.test.
 ```
 
-テストでは、正常な NSEC3 ゾーンの循環チェーン、型ビットマップ、empty non-terminal、委任・glue の扱いと署名を確認してから、加工後も全署名が有効で、指定した NSEC3 RRset だけが変更されることを確認します。署名は対応する 4 アルゴリズムで検証します。`ldns-verify-zone` がある場合は、正常系のゾーン構造を独立した実装でも確認します。
+各検証ケースを独立したゾーンファイルにする場合は、ケースごとに正常な未署名ゾーンから始めます。加工後に署名するのは Key Tag／Digest のケースで、`ds-rrsig-corrupt` は署名後の最後に適用します。NSD に読み込ませるのは加工がすべて終わったファイルです。
 
-## 補助シェルスクリプト
+複数の検証ケースをまとめて作成する場合や、親ゾーンの DS 追加から署名・加工まで一連の処理を任せる場合は、次の「補助スクリプト」にある一括生成スクリプトを利用できます。
 
-`scripts/` には FreeBSD `/bin/sh` を含む POSIX `sh` 向けの補助スクリプトがあります。作業ディレクトリは任意で、次のように実行できます。
+## 補助スクリプト
+
+`scripts/` にはゾーン生成・署名・加工をまとめて実行する POSIX `sh` スクリプトと、処理を担う Python スクリプトがあります。通常は一括生成スクリプトを使い、既存の署名手順を使う場合や特定工程だけを実行する場合は表の個別スクリプトを使ってください。
+
+| スクリプト | 用途・入出力 |
+| --- | --- |
+| [`dnssec_generate_error_zones.sh`](scripts/dnssec_generate_error_zones.sh) | 一括実行。テンプレートからゾーンを生成し、子ゾーン署名・加工、親ゾーンへの DS 追加・加工・署名、NSEC/NSEC3 ケース作成まで行う。`--key-dir`、`--template-dir`、`--output-dir` で各ディレクトリを指定する |
+| [`dnssec_make_error_zonefiles.sh`](scripts/dnssec_make_error_zonefiles.sh) | テンプレートから親・子の未署名ゾーンファイルだけを生成する。署名や DS 追加はしない。`--template-dir`、`--output-dir` を指定できる |
+| [`dnssec_sign_child_zones.sh`](scripts/dnssec_sign_child_zones.sh) | 指定したベースゾーン名に一致する子ゾーンファイルを一括署名し、各入力に `.signed` を付けたファイルを作る。テンプレートは署名対象外 |
+| [`dnssec_sign_zone.sh`](scripts/dnssec_sign_zone.sh) | 1つのゾーンファイルを `ldns-signzone` で署名し、入力ファイル名に `.signed` を付けて出力する |
+| [`dnssec_corrupt_child_zone.sh`](scripts/dnssec_corrupt_child_zone.sh) | 対応する子ゾーンの DNSKEY 署名破損・期限切れ、または A 署名破損のファイルを作成する。テンプレートディレクトリを第2引数に指定できる |
+| [`dnssec_corrupt_parent_zone.sh`](scripts/dnssec_corrupt_parent_zone.sh) | 親ゾーンファイルを指定モード（`ds-keytag-mismatch`、`ds-hash-mismatch`、`ds-rrsig-corrupt`）で加工し、入力ファイルを更新する |
+| [`dnssec_nsec_corrupt_zone.sh`](scripts/dnssec_nsec_corrupt_zone.sh) | NSEC/NSEC3 ケースを署名・加工する。型ビットマップ用に `--target-type`、NSEC3 用に `--nsec3-iterations`、`--nsec3-salt` を指定できる。既存の `.signed` は `.signed.orig` に退避される |
+| [`dnssec_add_ds_records.py`](scripts/dnssec_add_ds_records.py) | 親ゾーン内の NS 委任を確認し、鍵ディレクトリの `.ds` ファイルから DS を追加する。親ゾーンファイルを直接更新する |
+| [`dnssec_sign_optout_zone.py`](scripts/dnssec_sign_optout_zone.py) | Opt-Out 署名の内部処理用。未署名委任のハッシュを省略して署名する。通常は `dnssec_nsec_corrupt_zone.sh` から呼び出される |
+
+作業ディレクトリは任意で、例えば一括生成は次のように実行できます。
 
 ```sh
 PYTHON=.venv/bin/python \
@@ -224,6 +247,16 @@ python3 -m unittest -v test_shell_scripts.py
 ```
 
 `ldns-keygen` と `ldns-signzone` がある場合は、実鍵で Opt-Out ゾーンを署名・加工し、対象のハッシュが省略されていること、変更した NSEC3 とその RRSIG 以外が維持されることも検証します。これらのコマンドがない場合、その実鍵テストだけスキップします。
+
+## テスト
+
+NSEC/NSEC3 のカバー範囲、NODATA 型ビットマップ、NSEC3 Opt-Out の加工は、次のコマンドで検証できます。
+
+```bash
+.venv/bin/python -m unittest -v test_corrupt_zone.py
+```
+
+テストでは、正常な NSEC3 ゾーンの循環チェーン、型ビットマップ、empty non-terminal、委任・glue の扱いと署名を確認してから、加工後も全署名が有効で、指定した NSEC3 RRset だけが変更されることを確認します。署名は対応する 4 アルゴリズムで検証します。`ldns-verify-zone` がある場合は、正常系のゾーン構造を独立した実装でも確認します。
 
 ### Opt-Out ケースの仕組みと比較方法
 
@@ -285,31 +318,3 @@ zone:
 - 出力ゾーンは意図的に DNSSEC 検証に失敗します。通常利用している本番ゾーンには使用しないでください。
 - `nsec-*` モードでは、変更した NSEC/NSEC3 RRset の RRSIG だけを ZSK で再生成します。それ以外の署名は再計算しません。
 - 署名および RRSIG の再生成は RSASHA256 (8)、ECDSAP256SHA256 (13)、ED25519 (15)、ED448 (16) の鍵に対応しています。
-
-## 親ゾーンの更新について
-
-親ゾーンは、通常利用している署名手順で署名する場合、まず未署名のゾーンに対して `--sign-zone` を付けずに `ds-keytag-mismatch` や `ds-hash-mismatch` を実行し、DS を加工します。必要な加工をすべて終えてから親ゾーンを署名してください。こうすることで、加工後の DS に対する署名が作成されます。
-
-`ds-rrsig-corrupt` は署名済みゾーンに対して実行し、親ゾーンの `RRSIG DS` を壊します。この処理の後に親ゾーンを再署名すると破損した署名が修復されてしまうため、再署名しないでください。`--sign-zone` を使ってツール内で署名する方法もありますが、通常の署名手順を使う場合は次のように実行します。
-
-```bash
-# 1件目: 未署名ゾーンの DS Key Tag を加工
-.venv/bin/python corrupt_zone.py -i example.test.zone -o example.test.zone.work1 -m ds-keytag-mismatch -d example.test. -t keytag.ds.error.example.test.
-
-# 2件目: 同じ未署名ゾーンに別の DS 加工を重ねる
-.venv/bin/python corrupt_zone.py -i example.test.zone.work1 -o example.test.zone.work2 -m ds-hash-mismatch -d example.test. -t hash.ds.error.example.test.
-
-# example.test.zone.work2 を通常の署名手順で署名し、example.test.zone.signed を作成
-# 署名済みゾーンの DS RRSIG を加工
-.venv/bin/python corrupt_zone.py -i example.test.zone.signed -o example.test.zone.final -m ds-rrsig-corrupt -d example.test. -t sign.ds.error.example.test.
-```
-
-上の例で、NSD に読み込ませるファイルは最後の `example.test.zone.final` です。中間ファイルは作業用なので、不要になれば削除できます。
-
-各検証ケースを独立したゾーンファイルにする場合は、ケースごとに正常な未署名ゾーンから作業を始め、DS の加工後にそれぞれ通常の手順で署名してください。`ds-rrsig-corrupt` のケースでは、署名済みファイルを入力にして最後に RRSIG を加工します。署名処理の具体的なコマンドは、環境で使用している署名方法に合わせてください。
-
-1. example.test.zone を編集
-1. `.venv/bin/python corrupt_zone.py -i example.test.zone -o example.test.ds-keytag.zone -m ds-keytag-mismatch -d example.test. -t keytag.ds.error.example.test.`
-1. `example.test.ds-keytag.zone` を通常の署名手順で署名
-1. `ds-rrsig-corrupt` のケースでは、署名済みファイルを入力として `.venv/bin/python corrupt_zone.py -i example.test.ds-keytag.zone.signed -o example.test.ds-rrsig.zone.signed -m ds-rrsig-corrupt -d example.test. -t sign.ds.error.example.test.` を実行
-1. 権威サーバーでゾーンファイルを再読み込み
