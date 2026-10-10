@@ -95,6 +95,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="加工後のゾーン全体を dnspython で署名する",
     )
+    parser.add_argument(
+        "--nsec3-iterations",
+        type=int,
+        help="--sign-zone の NSEC3 署名で使う反復回数",
+    )
+    parser.add_argument(
+        "--nsec3-salt",
+        help="--sign-zone の NSEC3 署名で使う salt (偶数桁の16進数)",
+    )
     return parser.parse_args()
 
 
@@ -360,13 +369,21 @@ def find_ldns_signing_keys(
 
 
 def sign_zone_with_ldns_keys(
-    zone: dns.zone.Zone, zone_file: Path, key_directory: Path, mode: str = "success"
+    zone: dns.zone.Zone,
+    zone_file: Path,
+    key_directory: Path,
+    mode: str = "success",
+    nsec3_iterations: int | None = None,
+    nsec3_salt: bytes | None = None,
 ) -> int:
     if zone.origin is None:
         raise ValueError("ゾーンオリジンがありません")
     keys = find_ldns_signing_keys(key_directory, zone_file, zone.origin)
     if mode.startswith("nsec3-"):
-        sign_nsec3_zone(zone, keys, opt_out=mode == "nsec3-optout-cover-mismatch")
+        sign_nsec3_zone(
+            zone, keys, opt_out=mode == "nsec3-optout-cover-mismatch",
+            iterations=nsec3_iterations, salt=nsec3_salt,
+        )
         return 2
     dns.dnssec.sign_zone(
         zone,
@@ -377,7 +394,11 @@ def sign_zone_with_ldns_keys(
 
 
 def sign_nsec3_zone(
-    zone: dns.zone.Zone, keys: LdnsSigningKeys, opt_out: bool = False
+    zone: dns.zone.Zone,
+    keys: LdnsSigningKeys,
+    opt_out: bool = False,
+    iterations: int | None = None,
+    salt: bytes | None = None,
 ) -> None:
     if zone.origin is None:
         raise ValueError("ゾーンオリジンがありません")
@@ -398,7 +419,10 @@ def sign_nsec3_zone(
         dnskeys.ttl = soa.ttl
     dnskeys.add(keys.ksk.dnskey)
     dnskeys.add(keys.zsk.dnskey)
-    generate_nsec3_records(zone, flags=1 if opt_out else 0)
+    generate_nsec3_records(
+        zone, flags=1 if opt_out else 0,
+        iterations=iterations, salt=salt,
+    )
 
     inception = int(time.time())
     with zone.writer() as txn:
@@ -591,9 +615,16 @@ def nsec3_parameters(zone: dns.zone.Zone) -> tuple[int, int, int, bytes]:
     return 1, 0, 0, b""
 
 
-def generate_nsec3_records(zone: dns.zone.Zone, flags: int = 0) -> int:
+def generate_nsec3_records(
+    zone: dns.zone.Zone,
+    flags: int = 0,
+    iterations: int | None = None,
+    salt: bytes | None = None,
+) -> int:
     names = authoritative_zone_names(zone)
-    algorithm, _parameter_flags, iterations, salt = nsec3_parameters(zone)
+    algorithm, _parameter_flags, existing_iterations, existing_salt = nsec3_parameters(zone)
+    iterations = existing_iterations if iterations is None else iterations
+    salt = existing_salt if salt is None else salt
     if zone.origin is None:
         raise ValueError("ゾーンオリジンがありません")
     soa = zone.get_rdataset(zone.origin, dns.rdatatype.SOA)
@@ -957,6 +988,27 @@ def main() -> None:
     post_sign_modify = args.sign_zone and args.mode in POST_SIGN_MODES
 
     try:
+        if args.nsec3_iterations is not None and not 0 <= args.nsec3_iterations <= 65535:
+            raise ValueError("NSEC3 反復回数は 0 以上 65535 以下にしてください")
+        if args.nsec3_salt is not None and (
+            len(args.nsec3_salt) % 2
+            or any(character not in "0123456789abcdefABCDEF" for character in args.nsec3_salt)
+            or len(args.nsec3_salt) > 510
+        ):
+            raise ValueError("NSEC3 salt は510桁以下の偶数桁の16進数にしてください")
+        if (args.nsec3_iterations is not None or args.nsec3_salt is not None) and (
+            not args.sign_zone or not args.mode.startswith("nsec3-")
+        ):
+            raise ValueError("--nsec3-iterations/--nsec3-salt は nsec3-* --sign-zone と併用してください")
+        nsec3_salt = (
+            bytes.fromhex(args.nsec3_salt)
+            if args.nsec3_salt is not None
+            else None
+        )
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+
+    try:
         if post_sign_modify:
             if required_denial_type(args.mode) == dns.rdatatype.NSEC:
                 ensure_denial_records(zone, args.mode)
@@ -987,7 +1039,10 @@ def main() -> None:
         if args.key_directory is None:
             raise SystemExit("--sign-zone では --key-directory が必要です")
         try:
-            sign_zone_with_ldns_keys(zone, args.input, args.key_directory, args.mode)
+            sign_zone_with_ldns_keys(
+                zone, args.input, args.key_directory, args.mode,
+                args.nsec3_iterations, nsec3_salt,
+            )
             if post_sign_modify:
                 before_denial = (
                     denial_rrset_snapshot(zone, required_denial_type(args.mode))
