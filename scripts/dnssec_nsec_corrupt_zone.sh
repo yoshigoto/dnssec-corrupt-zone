@@ -113,20 +113,12 @@ set -- -i "$zone_file" -o "$signed_zone_file" \
 [ -z "$nsec3_salt" ] || set -- "$@" --nsec3-salt "$nsec3_salt"
 "$python" "$script_dir/../corrupt_zone.py" "$@"
 
-if [ "$add_target_type" -eq 1 ]; then
-	"$python" "$script_dir/../corrupt_zone.py" \
-		-i "$signed_zone_file" -o "$signed_zone_file.out" \
-		-d "$zone_origin" -m "$mode" \
-		--target-name "$target_name_prefix" \
-		--key-directory "$key_directory" \
-		--target-type "$target_type"
-else
-	"$python" "$script_dir/../corrupt_zone.py" \
-		-i "$signed_zone_file" -o "$signed_zone_file.out" \
-		-d "$zone_origin" -m "$mode" \
-		--target-name "$target_name_prefix" \
-		--key-directory "$key_directory"
-fi
+set -- -i "$signed_zone_file" -o "$signed_zone_file.out" \
+	-d "$zone_origin" -m "$mode" \
+	--target-name "$target_name_prefix" \
+	--key-directory "$key_directory"
+[ "$add_target_type" -ne 1 ] || set -- "$@" --target-type "$target_type"
+"$python" "$script_dir/../corrupt_zone.py" "$@"
 
 printf 'Signed zone file created at %s\n' "$signed_zone_file"
 mv "$signed_zone_file" "$signed_zone_file.orig"

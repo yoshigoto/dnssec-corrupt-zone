@@ -995,6 +995,31 @@ def validate_optout_delegation(
         raise ValueError(f"Opt-Out delegation must not have DS records: {target}")
 
 
+def validate_signing_options(
+    args: argparse.Namespace, zone: dns.zone.Zone, origin: dns.name.Name
+) -> bytes | None:
+    """署名関連オプションを検証し、NSEC3 salt を bytes で返す。"""
+    if args.mode == "nsec3-optout-cover-mismatch":
+        if args.target_name is None:
+            raise ValueError("Opt-Out モードでは --target-name が必要です")
+        validate_optout_delegation(zone, make_absolute_name(args.target_name, origin))
+    if args.nsec3_iterations is not None and not 0 <= args.nsec3_iterations <= 65535:
+        raise ValueError("NSEC3 反復回数は 0 以上 65535 以下にしてください")
+    if args.nsec3_salt is not None and (
+        len(args.nsec3_salt) % 2
+        or len(args.nsec3_salt) > 510
+        or any(character not in "0123456789abcdefABCDEF" for character in args.nsec3_salt)
+    ):
+        raise ValueError("NSEC3 salt は510桁以下の偶数桁の16進数にしてください")
+    if (args.nsec3_iterations is not None or args.nsec3_salt is not None) and (
+        not args.sign_zone or not args.mode.startswith("nsec3-")
+    ):
+        raise ValueError("--nsec3-iterations/--nsec3-salt は nsec3-* --sign-zone と併用してください")
+    if args.sign_only and (not args.sign_zone or args.mode not in POST_SIGN_MODES):
+        raise ValueError("--sign-only は署名後に加工するモードと --sign-zone の併用が必要です")
+    return bytes.fromhex(args.nsec3_salt) if args.nsec3_salt is not None else None
+
+
 def main() -> None:
     args = parse_args()
     origin = make_absolute_name(args.origin, dns.name.root)
@@ -1007,33 +1032,7 @@ def main() -> None:
     post_sign_modify = args.sign_zone and args.mode in POST_SIGN_MODES
 
     try:
-        if args.mode == "nsec3-optout-cover-mismatch":
-            if args.target_name is None:
-                raise ValueError("Opt-Out モードでは --target-name が必要です")
-            validate_optout_delegation(
-                zone, make_absolute_name(args.target_name, origin)
-            )
-        if args.nsec3_iterations is not None and not 0 <= args.nsec3_iterations <= 65535:
-            raise ValueError("NSEC3 反復回数は 0 以上 65535 以下にしてください")
-        if args.nsec3_salt is not None and (
-            len(args.nsec3_salt) % 2
-            or any(character not in "0123456789abcdefABCDEF" for character in args.nsec3_salt)
-            or len(args.nsec3_salt) > 510
-        ):
-            raise ValueError("NSEC3 salt は510桁以下の偶数桁の16進数にしてください")
-        if (args.nsec3_iterations is not None or args.nsec3_salt is not None) and (
-            not args.sign_zone or not args.mode.startswith("nsec3-")
-        ):
-            raise ValueError("--nsec3-iterations/--nsec3-salt は nsec3-* --sign-zone と併用してください")
-        if args.sign_only and (
-            not args.sign_zone or args.mode not in POST_SIGN_MODES
-        ):
-            raise ValueError("--sign-only は署名後に加工するモードと --sign-zone の併用が必要です")
-        nsec3_salt = (
-            bytes.fromhex(args.nsec3_salt)
-            if args.nsec3_salt is not None
-            else None
-        )
+        nsec3_salt = validate_signing_options(args, zone, origin)
     except ValueError as error:
         raise SystemExit(str(error)) from error
 
