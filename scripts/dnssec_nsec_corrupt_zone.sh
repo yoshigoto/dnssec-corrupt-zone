@@ -10,7 +10,6 @@ zone_file_name=$1
 mode=$2
 zone_origin=$3
 shift 3
-use_optout=0
 target_type=A
 nsec3_iterations=
 nsec3_salt=
@@ -18,28 +17,22 @@ nsec3_salt=
 case "$mode" in
 	nsec-cover-mismatch)
 		target_name_prefix=missing
-		use_nsec3=0
 		add_target_type=0
 		;;
 	nsec-type-bitmap-mismatch)
 		target_name_prefix=target
-		use_nsec3=0
 		add_target_type=1
 		;;
 	nsec3-cover-mismatch)
 		target_name_prefix=missing
-		use_nsec3=1
 		add_target_type=0
 		;;
 	nsec3-type-bitmap-mismatch)
 		target_name_prefix=target
-		use_nsec3=1
 		add_target_type=1
 		;;
 	nsec3-optout-cover-mismatch)
 		target_name_prefix=unsigned
-		use_nsec3=1
-		use_optout=1
 		add_target_type=0
 		;;
 	*)
@@ -109,68 +102,24 @@ if [ ! -f "$zone_file" ]; then
 	exit 1
 fi
 
-ksk_base=
-zsk_base=
-
-for key_file in "$key_directory"/K"$zone_origin".+*.key; do
-	[ -f "$key_file" ] || continue
-
-	flags=$(awk '{
-		for (i = 1; i <= NF; i++) {
-			if ($i == "DNSKEY") {
-				print $(i + 1)
-				exit
-			}
-		}
-	}' "$key_file")
-
-	key_base=${key_file%.key}
-	case "$flags" in
-		257) ksk_base=$key_base ;;
-		256) zsk_base=$key_base ;;
-	esac
-done
-
-if [ -z "$ksk_base" ] || [ -z "$zsk_base" ]; then
-	printf 'KSK (257) or ZSK (256) not found for %s in %s\n' \
-		"$zone_origin" "$key_directory" >&2
-	exit 1
-fi
-
 script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
 python=${PYTHON:-python3}
 
-if [ "$use_optout" -eq 1 ]; then
-	set -- -i "$zone_file" -o "$signed_zone_file" \
-		-d "$zone_origin" -t "$target_name_prefix" \
-		--zsk-key-base "$zsk_base" --ksk-key-base "$ksk_base"
-	[ -z "$nsec3_iterations" ] || set -- "$@" --nsec3-iterations "$nsec3_iterations"
-	[ -z "$nsec3_salt" ] || set -- "$@" --nsec3-salt "$nsec3_salt"
-	"$python" "$script_dir/dnssec_sign_optout_zone.py" "$@"
-elif [ "$use_nsec3" -eq 1 ]; then
-	set -- -n
-	[ -z "$nsec3_iterations" ] || set -- "$@" -t "$nsec3_iterations"
-	[ -z "$nsec3_salt" ] || set -- "$@" -s "$nsec3_salt"
-	ldns-signzone "$@" "$zone_file" "$zsk_base" "$ksk_base"
-else
-	ldns-signzone "$zone_file" "$zsk_base" "$ksk_base"
-fi
+set -- -i "$zone_file" -o "$signed_zone_file" \
+	-d "$zone_origin" -m "$mode" \
+	--target-name "$target_name_prefix" \
+	--key-directory "$key_directory" --sign-zone --sign-only
+[ -z "$nsec3_iterations" ] || set -- "$@" --nsec3-iterations "$nsec3_iterations"
+[ -z "$nsec3_salt" ] || set -- "$@" --nsec3-salt "$nsec3_salt"
+"$python" "$script_dir/../corrupt_zone.py" "$@"
+
+set -- -i "$signed_zone_file" -o "$signed_zone_file.out" \
+	-d "$zone_origin" -m "$mode" \
+	--target-name "$target_name_prefix" \
+	--key-directory "$key_directory"
+[ "$add_target_type" -ne 1 ] || set -- "$@" --target-type "$target_type"
+"$python" "$script_dir/../corrupt_zone.py" "$@"
 
 printf 'Signed zone file created at %s\n' "$signed_zone_file"
-
-if [ "$add_target_type" -eq 1 ]; then
-	"$python" "$script_dir/../corrupt_zone.py" \
-		-i "$signed_zone_file" -o "$signed_zone_file.out" \
-		-d "$zone_origin" -m "$mode" \
-		--target-name "$target_name_prefix" \
-		--zsk-private-key "$zsk_base.private" \
-		--target-type "$target_type"
-else
-	"$python" "$script_dir/../corrupt_zone.py" \
-		-i "$signed_zone_file" -o "$signed_zone_file.out" \
-		-d "$zone_origin" -m "$mode" \
-		--target-name "$target_name_prefix" \
-		--zsk-private-key "$zsk_base.private"
-fi
 mv "$signed_zone_file" "$signed_zone_file.orig"
 mv "$signed_zone_file.out" "$signed_zone_file"

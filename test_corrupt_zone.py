@@ -972,6 +972,57 @@ class CorruptZoneTests(unittest.TestCase):
                 return
         self.fail("壊れた NSEC レコードが見つかりませんでした")
 
+    def test_main_signs_optout_nsec3_with_explicit_parameters(self) -> None:
+        with TemporaryDirectory() as directory:
+            work_dir = Path(directory)
+            input_path = work_dir / "example.zone"
+            output_path = work_dir / "example.optout.zone.signed"
+            key_dir = work_dir / "keys"
+            key_dir.mkdir()
+            input_path.write_text(
+                self._unsigned_zone_text()
+                + "unsigned 300 IN NS ns.unsigned.example.\n"
+                + "ns.unsigned 300 IN A 192.0.2.4\n",
+                encoding="ascii",
+            )
+            for flags in (257, 256):
+                self._write_ldns_key_pair(
+                    key_dir, "example", ec.generate_private_key(ec.SECP256R1()),
+                    flags=flags, algorithm=13,
+                )
+
+            with patch(
+                "sys.argv",
+                [
+                    "corrupt_zone.py",
+                    "--input", str(input_path),
+                    "--output", str(output_path),
+                    "--origin", "example.",
+                    "--mode", "nsec3-optout-cover-mismatch",
+                    "--target-name", "unsigned.example.",
+                    "--key-directory", str(key_dir),
+                    "--sign-zone",
+                    "--nsec3-iterations", "1",
+                    "--nsec3-salt", "A1B2",
+                ],
+            ):
+                corrupt_zone.main()
+
+            zone = dns.zone.from_file(
+                str(output_path), origin=ORIGIN, relativize=False, check_origin=False
+            )
+
+        parameter = zone.get_rdataset(ORIGIN, dns.rdatatype.NSEC3PARAM)[0]
+        self.assertEqual(parameter.iterations, 1)
+        self.assertEqual(parameter.salt, b"\xa1\xb2")
+        target = dns.name.from_text("unsigned.example.")
+        target_hash = dns.dnssec.nsec3_hash(target, b"\xa1\xb2", 1, 1)
+        unsigned_hash = dns.name.from_text(
+            f"{target_hash}.example."
+        )
+        self.assertIsNone(zone.get_rdataset(unsigned_hash, dns.rdatatype.NSEC3))
+        self._assert_nsec3_signatures_valid(zone)
+
     def test_load_private_key_all_supported_algorithms(self) -> None:
         rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         ec_key = ec.generate_private_key(ec.SECP256R1())

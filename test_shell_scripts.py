@@ -51,21 +51,10 @@ if command == "python-stub":
         os.execv(sys.executable, [sys.executable, *arguments])
     shutil.copyfile(arguments[arguments.index("-i") + 1],
                     arguments[arguments.index("-o") + 1])
-else:
-    if "-f" in arguments:
-        output_index = arguments.index("-f") + 1
-        output = arguments[output_index]
-        source = arguments[output_index + 1]
-    else:
-        source = next(argument for argument in arguments
-                      if argument.endswith(".zone") and Path(argument).is_file())
-        output = source + ".signed"
-    shutil.copyfile(source, output)
 """
-        for command in ("python-stub", "ldns-signzone"):
-            executable = self.command_directory / command
-            executable.write_text(stub)
-            executable.chmod(0o755)
+        executable = self.command_directory / "python-stub"
+        executable.write_text(stub)
+        executable.chmod(0o755)
         self.environment = {
             **os.environ,
             "PATH": f"{self.command_directory}{os.pathsep}{os.environ['PATH']}",
@@ -139,15 +128,9 @@ else:
                 continue
             if arguments[0].endswith("dnssec_add_ds_records.py"):
                 continue
-            if arguments[0].endswith("dnssec_sign_optout_zone.py"):
-                self.assertEqual(
-                    Path(arguments[0]).resolve(), SCRIPTS / "dnssec_sign_optout_zone.py"
-                )
-                self.assertEqual(arguments[arguments.index("-t") + 1], "unsigned")
-            else:
-                self.assertEqual(
-                    Path(arguments[0]).resolve(), SCRIPTS.parent / "corrupt_zone.py"
-                )
+            self.assertEqual(
+                Path(arguments[0]).resolve(), SCRIPTS.parent / "corrupt_zone.py"
+            )
             source = Path(arguments[arguments.index("-i") + 1])
             expected_origin = source.name.removesuffix(".signed").removesuffix(".zone")
             self.assertEqual(arguments[arguments.index("-d") + 1], expected_origin)
@@ -165,22 +148,14 @@ else:
 
     def assert_signing_keys(self, commands: list) -> None:
         for command, arguments in commands:
-            if command != "ldns-signzone":
+            if command != "python-stub" or "--sign-zone" not in arguments:
                 continue
-            if "-f" in arguments:
-                source = arguments[arguments.index("-f") + 2]
-            else:
-                source = next(
-                    value for value in arguments
-                    if value.endswith(".zone")
-                )
+            source = arguments[arguments.index("-i") + 1]
             expected_origin = Path(source).name.removesuffix(".zone")
+            self.assertEqual(arguments[arguments.index("-d") + 1], expected_origin)
             self.assertEqual(
-                arguments[-2:],
-                [
-                    str(self.key_directory / f"K{expected_origin}.+008+00002"),
-                    str(self.key_directory / f"K{expected_origin}.+008+00001"),
-                ],
+                arguments[arguments.index("--key-directory") + 1],
+                str(self.key_directory),
             )
 
     def test_corrupt_child_zone_passes_each_child_origin(self) -> None:
@@ -319,9 +294,12 @@ else:
                 source.write_text(template.read_text().replace("algorithm", "rsasha256") + records)
                 output = self.work_directory / "optout.zone.signed"
                 result = subprocess.run(
-                    [sys.executable, str(SCRIPTS / "dnssec_sign_optout_zone.py"),
-                     "-i", str(source), "-o", str(output), "-d", origin.to_text(),
-                     "-t", target, "--zsk-key-base", "unused", "--ksk-key-base", "unused"],
+                    [
+                        sys.executable, str(SCRIPTS.parent / "corrupt_zone.py"),
+                        "-i", str(source), "-o", str(output), "-d", origin.to_text(),
+                        "-m", "nsec3-optout-cover-mismatch", "-t", target,
+                        "-k", str(self.key_directory), "--sign-zone", "--sign-only",
+                    ],
                     capture_output=True, text=True,
                 )
                 self.assertNotEqual(result.returncode, 0)
@@ -329,8 +307,8 @@ else:
                 self.assertFalse(output.exists())
 
     @unittest.skipUnless(
-        shutil.which("ldns-keygen") and shutil.which("ldns-signzone"),
-        "Real NSEC3 signing requires ldns-keygen and ldns-signzone",
+        shutil.which("ldns-keygen"),
+        "Real NSEC3 signing test requires ldns-keygen to create test keys",
     )
     def test_nsec3_signing_uses_iteration_and_salt_options(self) -> None:
         origin = dns.name.from_text(f"nsec3-params.{PARENT_ORIGIN}.")
@@ -371,8 +349,8 @@ else:
             self.assertEqual(parameter.salt, bytes.fromhex(salt) if salt else b"")
 
     @unittest.skipUnless(
-        shutil.which("ldns-keygen") and shutil.which("ldns-signzone"),
-        "Real Opt-Out signing requires ldns-keygen and ldns-signzone",
+        shutil.which("ldns-keygen"),
+        "Real Opt-Out signing test requires ldns-keygen to create test keys",
     )
     def test_optout_signing_omits_unsigned_hash_and_preserves_other_signatures(self) -> None:
         self.run_script(
@@ -575,6 +553,7 @@ else:
             if command == "python-stub"
             and "-m" in arguments
             and arguments[arguments.index("-m") + 1].endswith("type-bitmap-mismatch")
+            and "--target-type" in arguments
         ]
         self.assertEqual(
             {
@@ -595,6 +574,7 @@ else:
             if command == "python-stub"
             and "-m" in arguments
             and arguments[arguments.index("-m") + 1] == "nsec3-optout-cover-mismatch"
+            and "--sign-only" not in arguments
         ]
         self.assertEqual(len(optout_calls), 4)
         for arguments in optout_calls:
@@ -603,7 +583,9 @@ else:
         optout_sign_calls = [
             arguments for command, arguments in commands
             if command == "python-stub"
-            and arguments[0].endswith("dnssec_sign_optout_zone.py")
+            and "-m" in arguments
+            and arguments[arguments.index("-m") + 1] == "nsec3-optout-cover-mismatch"
+            and "--sign-only" in arguments
         ]
         self.assertEqual(len(optout_sign_calls), 4)
         for profile, iterations, salt in (
