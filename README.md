@@ -79,7 +79,7 @@ SOA の Serial は入力値を保持し、このツールでは変更しませ�
 
 `nsec3-* --sign-zone` は、dnspython の RRset 署名機能を使って NSEC3 専用の署名済みゾーンを作り、NSEC は生成しません。DNSKEY と NSEC3PARAM を用意し、署名対象の RRset に付く `RRSIG` も型ビットマップに含めて NSEC3 チェーンを生成してから署名します。empty non-terminal（配下の名前は存在するが、その名前自身にはレコードがない名前）も NSEC3 の対象に含め、委任先の glue や委任配下のデータは署名・ハッシュ化しません。委任の NS 自体は署名せず、DS がある場合だけ DS を署名します。
 
-NSEC3PARAM がなければ、SHA-1、反復回数 0、salt なしを使用します。既存の NSEC3PARAM が 1 レコードあれば、そのアルゴリズム・反復回数・salt を使います。`--nsec3-iterations` と `--nsec3-salt` を指定すると、それぞれ既存値に優先して署名時の値を設定できます。再署名時は古い NSEC/NSEC3 と RRSIG を取り除いて証明チェーンを作り直します。`nsec3-optout-cover-mismatch --sign-zone` では DS のない委任のハッシュを省略し、Opt-Out フラグ付きの範囲を生成します。
+NSEC3PARAM がなければ、SHA-1、反復回数 0、salt なしを使用します。既存の NSEC3PARAM が 1 レコードあれば、そのアルゴリズム・反復回数・salt を使います。`--nsec3-iterations` と `--nsec3-salt` を指定すると、それぞれ既存値に優先して署名時の値を設定できます。`ldns-signzone -n` を使っていた従来の版は、指定しない場合の反復回数が 1 でしたが、現在は 0 です。従来と同じ結果にするには `--nsec3-iterations 1` を指定してください。再署名時は古い NSEC/NSEC3 と RRSIG を取り除いて証明チェーンを作り直します。`nsec3-optout-cover-mismatch --sign-zone` では DS のない委任のハッシュを省略し、Opt-Out フラグ付きの範囲を生成します。
 
 `nsec-cover-mismatch` と `nsec3-cover-mismatch` は、存在しない名前に対する NXDOMAIN 応答などで必要なカバー範囲を壊します。カバー範囲の終端は範囲に含まれないため、Next を指定名（NSEC3 では指定名のハッシュ）に変更します。Next を所有者自身にすると循環範囲が広がり、不在証明が検証成功する場合があるため、自己ループは使いません。変更対象 RRset の署名は再生成します。`nsec3-optout-cover-mismatch` は、Opt-Out フラグを持つ NSEC3 が対象名を覆う場合に限り、その DS 不在証明を壊します。
 
@@ -200,7 +200,7 @@ Opt-Out の未署名委任とは別に、AAAA レコードだけを持つ `aaaa.
 | [`dnssec_sign_zone.sh`](scripts/dnssec_sign_zone.sh) | 1つのゾーンファイルを `corrupt_zone.py` で署名し、入力ファイル名に `.signed` を付けて出力する |
 | [`dnssec_corrupt_child_zone.sh`](scripts/dnssec_corrupt_child_zone.sh) | 対応する子ゾーンの DNSKEY 署名破損・期限切れ、または A 署名破損のファイルを作成する。テンプレートディレクトリを第2引数に指定できる |
 | [`dnssec_corrupt_parent_zone.sh`](scripts/dnssec_corrupt_parent_zone.sh) | 親ゾーンファイルを指定モード（`ds-keytag-mismatch`、`ds-hash-mismatch`、`ds-rrsig-corrupt`）で加工し、入力ファイルを更新する |
-| [`dnssec_nsec_corrupt_zone.sh`](scripts/dnssec_nsec_corrupt_zone.sh) | NSEC/NSEC3 ケースを署名・加工する。型ビットマップ用に `--target-type`、NSEC3 用に `--nsec3-iterations`、`--nsec3-salt` を指定できる。既存の `.signed` は `.signed.orig` に退避される |
+| [`dnssec_nsec_corrupt_zone.sh`](scripts/dnssec_nsec_corrupt_zone.sh) | NSEC/NSEC3 ケースを署名・加工する。型ビットマップ用に `--target-type`、NSEC3 用に `--nsec3-iterations`、`--nsec3-salt` を指定できる (省略時の反復回数は 0)。既存の `.signed` は `.signed.orig` に退避される |
 | [`dnssec_add_ds_records.py`](scripts/dnssec_add_ds_records.py) | 親ゾーン内の NS 委任を確認し、鍵ディレクトリの `.ds` ファイルから DS を追加する。親ゾーンファイルを直接更新する |
 
 作業ディレクトリは任意で、例えば一括生成は次のように実行できます。
