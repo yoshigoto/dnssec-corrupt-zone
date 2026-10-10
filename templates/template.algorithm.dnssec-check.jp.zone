@@ -7,15 +7,6 @@ success.algorithm.dnssec-check.jp.	IN	SOA	ns.dnssec-check.jp.	root.dnssec-check.
 				1h )		; Minimum (TTL for Negative Cache)
 		IN	NS	ns.dnssec-check.jp.
 		IN	NS	ns2.dnssec-check.jp.
-		IN	MX	0 .		; This record explicitly states that emails will not be received for the domain name in which the record is set.
-;
-; SPF (Treat all Emails from any source IP address as malicious.)
-;
-		IN	TXT	"v=spf1 -all"
-;
-; Resource Record
-;
-localhost	IN	CNAME	localhost.
 ;
 www		IN	A	160.16.207.148
 		IN	AAAA	2001:e42:102:1805:160:16:207:148

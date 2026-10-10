@@ -7,6 +7,7 @@ optout.mismatch.nsec3.algorithm.dnssec-check.jp.	IN	SOA	ns.dnssec-check.jp.	root
 				1h )
 		IN	NS	ns.dnssec-check.jp.
 		IN	NS	ns2.dnssec-check.jp.
+;
 www		IN	A	160.16.207.148
 ;
 ; Unsigned delegation: no DS and no matching NSEC3 owner.
