@@ -1,12 +1,13 @@
 $TTL	2m
 optout.mismatch.nsec3.algorithm.dnssec-check.jp.	IN	SOA	ns.dnssec-check.jp.	root.dnssec-check.jp. (
-				0000000001
-				2h
-				1h
-				1w
-				1h )
+				0000000001	; Serial
+				2h		; Refresh (Primary zone check interval)
+				1h		; Retry (Primary zone check retry)
+				1w		; Expire (Expire time for Primary zone)
+				1h )		; Minimum (TTL for Negative Cache)
 		IN	NS	ns.dnssec-check.jp.
 		IN	NS	ns2.dnssec-check.jp.
+		IN	NS	ns3.dnssec-check.jp.
 ;
 www		IN	A	160.16.207.148
 ;

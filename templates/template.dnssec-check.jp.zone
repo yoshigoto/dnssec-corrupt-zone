@@ -7,11 +7,14 @@ dnssec-check.jp.	IN	SOA	ns.dnssec-check.jp.	root.dnssec-check.jp. (
 				1h )		; Minimum (TTL for Negative Cache)
 		IN	NS	ns.dnssec-check.jp.
 		IN	NS	ns2.dnssec-check.jp.
+		IN	NS	ns3.dnssec-check.jp.
 ;
 ns		IN	A	160.16.209.55
 		IN	AAAA	2001:e42:102:1806:160:16:209:55
 ns2		IN	A	160.16.207.148
 		IN	AAAA	2001:e42:102:1805:160:16:207:148
+ns3		IN	A	133.242.203.155
+		IN	AAAA	2401:2500:102:1211:133:242:203:155
 www		IN	A	160.16.207.148
 		IN	AAAA	2001:e42:102:1805:160:16:207:148
 ;
