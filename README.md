@@ -2,15 +2,15 @@
 
 DNSSEC ゾーンファイルを検証用に加工する Python スクリプトです。親ゾーンの `DS`、子ゾーンの `DNSKEY` と否定応答に使われる NSEC/NSEC3 を意図的に不整合にします。[DNSSEC 委任状態検証ツール](https://www.on-link.jp/dnssec-validator/) で、実際に壊れた事例を確認することができます。
 
-このツールは NSD の再読み込みを行いません。`--sign-zone` を指定すると、`ldns-keygen` 形式の鍵ファイルを使って dnspython でゾーン全体を署名します。`RRSIG` を破損するモードと `nsec-*` モードでは、署名後に対象レコードを壊します。`nsec-*` モードでは、指定された ZSK、または `--key-directory` から自動選択した ZSK で変更対象 NSEC/NSEC3 RRset の RRSIG だけを再生成します。必要に応じて署名前、または署名済みのゾーンファイルを用意し、このツールで出力されたゾーンファイルを NSD で読み込ませてください。
+このツールは NSD の再読み込みを行いません。`--sign-zone` を指定すると、ldns 互換形式の鍵ファイルを使って dnspython でゾーン全体を署名します。`RRSIG` を破損するモードと `nsec-*` モードでは、署名後に対象レコードを壊します。`nsec-*` モードでは、指定された ZSK、または `--key-directory` から自動選択した ZSK で変更対象 NSEC/NSEC3 RRset の RRSIG だけを再生成します。必要に応じて署名前、または署名済みのゾーンファイルを用意し、このツールで出力されたゾーンファイルを NSD で読み込ませてください。
 
 なお、本ツールで作成したドメイン名のリストを、[DNSSEC 信頼の連鎖確認ページ](https://www.dnssec-check.jp/) で公開しています。
 
 ## 必要環境
 
-- Python 3.10 以降
-- `dnspython` 2.6 以降、3 未満
-- `cryptography` 42 以降
+- Python 3.11 以降
+- `dnspython` 2.9 以降、3 未満
+- `cryptography` 47 以降
 - 親ゾーン・子ゾーンファイル (目的によって署名済みのもの、もしくは未署名のもの)
 
 依存するモジュールをインストールします。
@@ -41,8 +41,8 @@ uv pip install --python .venv/bin/python -r requirements.txt
 | `--mode`, `-m` | 後述する検証ケース |
 | `--target-name`, `-t` | 加工対象の名前 (`ds-*`、`nsec-*`、`a-rrsig-corrupt` モードでは必須)。`www` のような相対名は `--origin` に対して解決され、末尾に `.` がある名前は FQDN として扱われます |
 | `--target-type` | 型ビットマップ不整合モードで追加する問い合わせ型 (既定: `A`) |
-| `--zsk-private-key` | `nsec-*` モードで変更した NSEC/NSEC3 RRset を再署名する ZSK の `.private` ファイル (RSASHA256 (8)、ECDSAP256SHA256 (13)、ED25519 (15)、ED448 (16))。省略時は `--key-directory` から自動選択 |
-| `--key-directory`, `-k` | `ldns-keygen` 形式の KSK/ZSK 鍵ファイルがあるディレクトリ。ゾーンファイル名から `K<zone>.+<algorithm>+<keytag>.key` を探し、DNSKEY フラグ 257 を KSK、256 を ZSK として選択する。対応する秘密鍵は `.key` と同じベース名に `.private` を付けたファイルを使う |
+| `--zsk-private-key` | `nsec-*` モードで変更した NSEC/NSEC3 RRset を再署名する ZSK の `.private` ファイル (RSASHA256 (8)、ECDSAP256SHA256 (13)、ED25519 (15)、ED448 (16)、MLDSA44 (18))。省略時は `--key-directory` から自動選択 |
+| `--key-directory`, `-k` | ldns 互換形式の KSK/ZSK 鍵ファイルがあるディレクトリ。ゾーンファイル名から `K<zone>.+<algorithm>+<keytag>.key` を探し、DNSKEY フラグ 257 を KSK、256 を ZSK として選択する。対応する秘密鍵は `.key` と同じベース名に `.private` を付けたファイルを使う |
 | `--sign-zone` | dnspython でゾーン全体を署名する。`ds-keytag-mismatch` と `ds-hash-mismatch` は加工後に署名し、`ds-rrsig-corrupt`、`dnskey-rrsig-*`、`nsec-*` は署名後に加工する |
 | `--sign-only` | `--sign-zone` と署名後加工モードを併用し、署名のみ行う。補助スクリプトが署名済みファイルを保存してから別工程で加工する場合に使う |
 | `--nsec3-iterations` | `nsec3-* --sign-zone` の署名時に使う NSEC3 反復回数 (0〜65535)。省略時は既存の `NSEC3PARAM`、なければ 0 |
@@ -75,7 +75,7 @@ SOA の Serial は入力値を保持し、このツールでは変更しませ�
 
 加工対象となる `DS` は親ゾーンのものであり、加工対象となる `RRSIG` は子ゾーンのものです。同じ委任先について複数の失敗パターンを公開する場合は、毎回、加工前の正常なゾーンから始め、モードに応じた署名状態（DS 値の加工は署名前、`RRSIG` の加工は署名後）で処理してください。
 
-`nsec-*` モードを署名済みゾーンに対して実行する場合は、NSEC/NSEC3 の RDATA を変更した後、`--zsk-private-key` で指定した ZSK、または `--key-directory` から自動選択した ZSK を使って変更対象 RRset の RRSIG だけを再生成します。`--sign-zone` を指定した場合は、未署名ゾーンに NSEC/NSEC3 を生成してからゾーン全体を署名し、その後に NSEC/NSEC3 を壊して変更対象 RRset の RRSIG だけを再生成します。`--key-directory` を使う場合は、`ldns-keygen` で生成した対応アルゴリズム（RSASHA256、ECDSAP256SHA256、ED25519、ED448）の `.key` と、同じベース名の `.private` を同じディレクトリに配置してください。
+`nsec-*` モードを署名済みゾーンに対して実行する場合は、NSEC/NSEC3 の RDATA を変更した後、`--zsk-private-key` で指定した ZSK、または `--key-directory` から自動選択した ZSK を使って変更対象 RRset の RRSIG だけを再生成します。`--sign-zone` を指定した場合は、未署名ゾーンに NSEC/NSEC3 を生成してからゾーン全体を署名し、その後に NSEC/NSEC3 を壊して変更対象 RRset の RRSIG だけを再生成します。`--key-directory` を使う場合は、対応アルゴリズム（RSASHA256、ECDSAP256SHA256、ED25519、ED448、MLDSA44）の `.key` と、同じベース名の `.private` を同じディレクトリに配置してください。MLDSA44 の秘密鍵は `PrivateKey:` に 32 バイトの seed を Base64 で指定する形式に対応します。MLDSA44 の DNSSEC 仕様は IANA アルゴリズム番号 18 として登録された [IETF Internet-Draft](https://datatracker.ietf.org/doc/draft-westerbaan-dnssec-mldsa/) に基づきます。
 
 `nsec3-* --sign-zone` は、dnspython の RRset 署名機能を使って NSEC3 専用の署名済みゾーンを作り、NSEC は生成しません。DNSKEY と NSEC3PARAM を用意し、署名対象の RRset に付く `RRSIG` も型ビットマップに含めて NSEC3 チェーンを生成してから署名します。empty non-terminal（配下の名前は存在するが、その名前自身にはレコードがない名前）も NSEC3 の対象に含め、委任先の glue や委任配下のデータは署名・ハッシュ化しません。委任の NS 自体は署名せず、DS がある場合だけ DS を署名します。
 
@@ -319,4 +319,4 @@ zone:
 
 - 出力ゾーンは意図的に DNSSEC 検証に失敗します。通常利用している本番ゾーンには使用しないでください。
 - `nsec-*` モードでは、変更した NSEC/NSEC3 RRset の RRSIG だけを ZSK で再生成します。それ以外の署名は再計算しません。
-- 署名および RRSIG の再生成は RSASHA256 (8)、ECDSAP256SHA256 (13)、ED25519 (15)、ED448 (16) の鍵に対応しています。
+- 署名および RRSIG の再生成は RSASHA256 (8)、ECDSAP256SHA256 (13)、ED25519 (15)、ED448 (16)、MLDSA44 (18) の鍵に対応しています。MLDSA44 の DNSSEC 仕様は IETF Internet-Draft に基づきます。

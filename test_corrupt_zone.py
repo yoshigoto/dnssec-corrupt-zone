@@ -11,7 +11,7 @@ import dns.name
 import dns.rdata
 import dns.rdatatype
 import dns.zone
-from cryptography.hazmat.primitives.asymmetric import ec, ed25519, ed448, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, ed448, mldsa, rsa
 
 import corrupt_zone
 
@@ -614,6 +614,7 @@ class CorruptZoneTests(unittest.TestCase):
             (13, lambda: ec.generate_private_key(ec.SECP256R1())),
             (15, lambda: ed25519.Ed25519PrivateKey.generate()),
             (16, lambda: ed448.Ed448PrivateKey.generate()),
+            (18, lambda: mldsa.MLDSA44PrivateKey.generate()),
         ]
         for algorithm, keygen in algorithms:
             with self.subTest(algorithm=algorithm), TemporaryDirectory() as directory:
@@ -813,12 +814,62 @@ class CorruptZoneTests(unittest.TestCase):
             origin=ORIGIN,
         )
 
+    def test_sign_zone_with_mldsa44_keys(self) -> None:
+        zone = dns.zone.from_text(
+            self._unsigned_zone_text(),
+            origin=ORIGIN,
+            relativize=True,
+            check_origin=False,
+        )
+        with TemporaryDirectory() as directory:
+            key_dir = Path(directory)
+            for flags in (257, 256):
+                seed = bytes(range(32)) if flags == 257 else bytes(range(1, 33))
+                private_key = mldsa.MLDSA44PrivateKey.from_seed_bytes(seed)
+                self._write_ldns_key_pair(
+                    key_dir, "example", private_key, flags=flags, algorithm=18
+                )
+
+            self.assertEqual(
+                corrupt_zone.sign_zone_with_ldns_keys(
+                    zone, Path("example.zone"), key_dir
+                ),
+                2,
+            )
+
+        dnskey_rdataset = next(
+            rdataset
+            for rdataset in zone.nodes[dns.name.empty].rdatasets
+            if rdataset.rdtype == dns.rdatatype.DNSKEY
+        )
+        soa_rdataset = next(
+            rdataset
+            for rdataset in zone.nodes[dns.name.empty].rdatasets
+            if rdataset.rdtype == dns.rdatatype.SOA
+        )
+        rrsig_rdataset = next(
+            rdataset
+            for rdataset in zone.nodes[dns.name.empty].rdatasets
+            if rdataset.rdtype == dns.rdatatype.RRSIG
+            and any(
+                corrupt_zone.rrsig_covers(rrsig, dns.rdatatype.SOA)
+                for rrsig in rdataset
+            )
+        )
+        dns.dnssec.validate(
+            (ORIGIN, soa_rdataset),
+            (ORIGIN, rrsig_rdataset),
+            {ORIGIN: dnskey_rdataset},
+            origin=ORIGIN,
+        )
+
     def test_main_signs_then_corrupts_dnskey_rrsig(self) -> None:
         algorithms = [
             (8, lambda: rsa.generate_private_key(public_exponent=65537, key_size=2048)),
             (13, lambda: ec.generate_private_key(ec.SECP256R1())),
             (15, lambda: ed25519.Ed25519PrivateKey.generate()),
             (16, lambda: ed448.Ed448PrivateKey.generate()),
+            (18, lambda: mldsa.MLDSA44PrivateKey.generate()),
         ]
         for alg, keygen in algorithms:
             with self.subTest(algorithm=alg):
@@ -1075,6 +1126,7 @@ class CorruptZoneTests(unittest.TestCase):
             (13, lambda: ec.generate_private_key(ec.SECP256R1())),
             (15, lambda: ed25519.Ed25519PrivateKey.generate()),
             (16, lambda: ed448.Ed448PrivateKey.generate()),
+            (18, lambda: mldsa.MLDSA44PrivateKey.generate()),
         ]
         for alg, keygen in algorithms:
             with self.subTest(algorithm=alg):
@@ -1140,6 +1192,7 @@ class CorruptZoneTests(unittest.TestCase):
             (13, lambda: ec.generate_private_key(ec.SECP256R1())),
             (15, lambda: ed25519.Ed25519PrivateKey.generate()),
             (16, lambda: ed448.Ed448PrivateKey.generate()),
+            (18, lambda: mldsa.MLDSA44PrivateKey.generate()),
         ]
         for alg, keygen in algorithms:
             with self.subTest(algorithm=alg):
@@ -1305,6 +1358,17 @@ class CorruptZoneTests(unittest.TestCase):
                 [
                     "Private-key-format: v1.2",
                     "Algorithm: 16 (ED448)",
+                    f"PrivateKey: {b64}",
+                    "",
+                ]
+            )
+        if algorithm == 18 and isinstance(private_key, mldsa.MLDSA44PrivateKey):
+            raw = private_key.private_bytes_raw()
+            b64 = base64.b64encode(raw).decode("ascii")
+            return "\n".join(
+                [
+                    "Private-key-format: v1.3",
+                    "Algorithm: 18 (MLDSA44)",
                     f"PrivateKey: {b64}",
                     "",
                 ]
