@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -498,6 +499,79 @@ if command == "python-stub":
         self.assertIn("DS records added: 1", first_run.stdout)
         self.assertIn("DS records added: 0", second_run.stdout)
         self.assertEqual(zone_file.read_text().count(" IN DS "), 1)
+
+    def test_mldsa_keygen_creates_compatible_ksk_zsk_and_ds_files(self) -> None:
+        origin = dns.name.from_text("mldsa.example.test.")
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "dnssec_mldsa_keygen.py"),
+                origin.to_text(),
+                "--key-directory",
+                str(self.key_directory),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        key_files = sorted(self.key_directory.glob("*.key"))
+        self.assertEqual(len(key_files), 2)
+        ds_files = sorted(self.key_directory.glob("*.ds"))
+        self.assertEqual(len(ds_files), 1)
+        dnskeys = {}
+        for key_file in key_files:
+            zone = dns.zone.from_file(
+                str(key_file), origin=origin, relativize=False, check_origin=False
+            )
+            dnskey = zone.get_rdataset(origin, dns.rdatatype.DNSKEY)[0]
+            self.assertEqual(dnskey.algorithm, 18)
+            self.assertEqual(
+                key_file.name,
+                f"K{origin.to_text()[:-1]}.+018+{dns.dnssec.key_id(dnskey):05d}.key",
+            )
+            private_path = key_file.with_suffix(".private")
+            private_key = corrupt_zone.load_private_key(private_path)
+            self.assertEqual(
+                dns.dnssec.make_dnskey(
+                    private_key.public_key(), 18, flags=dnskey.flags
+                ),
+                dnskey,
+            )
+            self.assertEqual(stat.S_IMODE(private_path.stat().st_mode), 0o600)
+            dnskeys[dnskey.flags] = dnskey
+
+        self.assertEqual(set(dnskeys), {256, 257})
+        ds_zone = dns.zone.from_file(
+            str(ds_files[0]), origin=origin, relativize=False, check_origin=False
+        )
+        ds = ds_zone.get_rdataset(origin, dns.rdatatype.DS)[0]
+        self.assertEqual(ds, dns.dnssec.make_ds(origin, dnskeys[257], "SHA256"))
+        self.assertNotEqual(dns.dnssec.key_id(dnskeys[257]), dns.dnssec.key_id(dnskeys[256]))
+
+        parent_zone_path = self.work_directory / BASE_ZONE_FILE
+        parent_zone_path.write_text(
+            f"$ORIGIN {PARENT_ORIGIN}.\n"
+            "$TTL 300\n"
+            "@ IN SOA ns.example.test. hostmaster.example.test. "
+            "(1 2h 1h 1w 1h)\n"
+            "mldsa IN NS ns.example.test.\n",
+            encoding="ascii",
+        )
+        ds_result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "dnssec_add_ds_records.py"),
+                str(parent_zone_path),
+                PARENT_ORIGIN,
+                str(self.key_directory),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(ds_result.returncode, 0, ds_result.stdout + ds_result.stderr)
+        self.assertIn("DS records added: 1", ds_result.stdout)
+        self.assertIn(f"IN DS {ds.to_text()}", parent_zone_path.read_text())
 
     def test_generate_error_zones_preserves_parent_and_child_origins(self) -> None:
         self.prepare_child_zones()
