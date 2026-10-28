@@ -78,6 +78,21 @@ expire.dnskey.error.ed448	IN	NS	ns.dnssec-check.jp.
 sign.a.error.ed448		IN	NS	ns.dnssec-check.jp.
 					IN	NS	ns2.dnssec-check.jp.
 ;
+success.mldsa44				IN	NS	ns.dnssec-check.jp.
+					IN	NS	ns2.dnssec-check.jp.
+keytag.ds.error.mldsa44		IN	NS	ns.dnssec-check.jp.
+					IN	NS	ns2.dnssec-check.jp.
+hash.ds.error.mldsa44			IN	NS	ns.dnssec-check.jp.
+					IN	NS	ns2.dnssec-check.jp.
+sign.ds.error.mldsa44			IN	NS	ns.dnssec-check.jp.
+					IN	NS	ns2.dnssec-check.jp.
+sign.dnskey.error.mldsa44		IN	NS	ns.dnssec-check.jp.
+					IN	NS	ns2.dnssec-check.jp.
+expire.dnskey.error.mldsa44		IN	NS	ns.dnssec-check.jp.
+					IN	NS	ns2.dnssec-check.jp.
+sign.a.error.mldsa44			IN	NS	ns.dnssec-check.jp.
+					IN	NS	ns2.dnssec-check.jp.
+;
 cover.mismatch.nsec.rsasha256	IN	NS	ns.dnssec-check.jp.
 					IN	NS	ns2.dnssec-check.jp.
 type.mismatch.nsec.rsasha256	IN	NS	ns.dnssec-check.jp.

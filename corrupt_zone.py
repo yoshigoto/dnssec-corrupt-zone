@@ -21,7 +21,7 @@ import dns.rdatatype
 import dns.rrset
 import dns.rdtypes.util
 import dns.zone
-from cryptography.hazmat.primitives.asymmetric import ec, ed25519, ed448, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, ed448, mldsa, rsa
 
 IN = dns.rdataclass.IN
 SUPPORTED_ALGORITHMS: dict[int, str] = {
@@ -29,6 +29,7 @@ SUPPORTED_ALGORITHMS: dict[int, str] = {
     dns.dnssec.ECDSAP256SHA256: "ECDSAP256SHA256",
     dns.dnssec.ED25519: "ED25519",
     dns.dnssec.ED448: "ED448",
+    dns.dnssec.MLDSA44: "MLDSA44",
 }
 DEFAULT_SIGNATURE_LIFETIME = 30 * 24 * 60 * 60
 LDNS_KEY_FILE = re.compile(r"^K(?P<domain>.+)\.\+(?P<algorithm>\d{3})\+(?P<key_tag>\d{5})\.key$")
@@ -238,6 +239,7 @@ PrivateKey = (
     | ec.EllipticCurvePrivateKey
     | ed25519.Ed25519PrivateKey
     | ed448.Ed448PrivateKey
+    | mldsa.MLDSA44PrivateKey
 )
 
 
@@ -297,6 +299,9 @@ def load_private_key(path: Path) -> PrivateKey:
         if algorithm == dns.dnssec.ED448:
             raw = decode_private_bytes(values["PrivateKey"])
             return ed448.Ed448PrivateKey.from_private_bytes(raw)
+        if algorithm == dns.dnssec.MLDSA44:
+            raw = decode_private_bytes(values["PrivateKey"])
+            return mldsa.MLDSA44PrivateKey.from_seed_bytes(raw)
         raise ValueError(f"未対応の鍵アルゴリズムです: {algorithm}")
     except (KeyError, OSError, ValueError) as error:
         if isinstance(error, ValueError) and (

@@ -71,7 +71,7 @@ fi
 
 cd "$output_directory"
 
-signing_algorithms="rsasha256 ecdsap256sha256 ed25519 ed448"
+signing_algorithms="rsasha256 ecdsap256sha256 ed25519 ed448 mldsa44"
 for algorithm in $signing_algorithms; do
 	success_file="success.$algorithm.$base_zone_file"
 	printf 'Creating %s\n' "$success_file"
