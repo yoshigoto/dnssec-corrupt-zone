@@ -166,7 +166,7 @@ if command == "python-stub":
             str(self.template_directory),
         )
         commands = self.commands()
-        self.assertEqual(len(commands), 12)
+        self.assertEqual(len(commands), 15)
         self.assert_python_origins(commands)
         self.assertEqual(
             {arguments[arguments.index("-m") + 1] for _, arguments in commands},
@@ -177,7 +177,7 @@ if command == "python-stub":
         self.prepare_child_zones()
         self.run_script("dnssec_sign_child_zones.sh", BASE_ZONE_FILE)
         commands = self.commands()
-        self.assertEqual(len(commands), 47)
+        self.assertEqual(len(commands), 54)
         self.assert_signing_keys(commands)
 
     def test_make_error_zonefiles_replaces_all_algorithm_occurrences(self) -> None:
@@ -196,7 +196,9 @@ if command == "python-stub":
             str(output_directory),
         )
 
-        for algorithm in ("rsasha256", "ecdsap256sha256", "ed25519", "ed448"):
+        for algorithm in (
+            "rsasha256", "ecdsap256sha256", "ed25519", "ed448", "mldsa44",
+        ):
             zone_file = output_directory / f"success.{algorithm}.{BASE_ZONE_FILE}"
             contents = zone_file.read_text()
             self.assertIn(f"success.{algorithm}.example.test.", contents)
@@ -521,7 +523,7 @@ if command == "python-stub":
         )
         self.assertLess(parent_contents.index(" IN DS "), parent_contents.index("; EOF"))
         commands = self.commands()
-        self.assertEqual(len(commands), 109)
+        self.assertEqual(len(commands), 122)
         self.assert_python_origins(commands)
         self.assert_signing_keys(commands)
         for prefix in (

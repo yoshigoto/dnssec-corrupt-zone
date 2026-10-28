@@ -213,9 +213,11 @@ PYTHON=.venv/bin/python \
 
 テンプレートは既定でリポジトリの `templates/` から読み込みます。別の場所を使う場合は `--template-dir DIR`、生成先を指定する場合は `--output-dir DIR` を指定します。どちらも相対パスはコマンド実行時のカレントディレクトリを基準に解決します。出力先は未作成でも作成されます。`dnssec_make_error_zonefiles.sh` 単体にも、同じ `--template-dir` / `--output-dir` オプションを指定できます。
 
-独自のテンプレートディレクトリには、`template.<base-zone>.zone`（親）、`template.algorithm.<base-zone>.zone`（通常の子）、`template.optout.algorithm.<base-zone>.zone`（Opt-Out 用の子）を用意してください。Opt-Out 用テンプレートには、`unsigned` という名前の NS 委任を置き、DS は置きません。
+独自のテンプレートディレクトリには、`template.<base-zone>.zone`（親）、`template.algorithm.<base-zone>.zone`（通常の子）、`template.optout.algorithm.<base-zone>.zone`（Opt-Out 用の子）を用意してください。親テンプレートには、生成する各アルゴリズムの子ゾーン委任も必要です（`rsasha256`、`ecdsap256sha256`、`ed25519`、`ed448`、`mldsa44`）。Opt-Out 用テンプレートには、`unsigned` という名前の NS 委任を置き、DS は置きません。
 
 `PYTHON` は Python 実行ファイル、`--key-dir DIR` は鍵ディレクトリを指定します。鍵ディレクトリは環境変数 `DNSSEC_KEY_DIR` でも指定でき、`--key-dir` が優先されます。どちらも未指定の場合は、実行時のカレントディレクトリから見た `../keys` です。Python の既定値は `python3` です。スクリプト本体と `corrupt_zone.py` はスクリプトの配置場所を基準に検索します。個別の署名スクリプトでは `DNSSEC_ZONE_DIR` でゾーンディレクトリも指定できます。署名処理は dnspython と cryptography で行います。
+
+シェルスクリプトは MLDSA44 の鍵を生成しません。MLDSA44 を使う場合は、DNSKEY アルゴリズム 18 の `.key`、32 バイトの seed を `PrivateKey:` に Base64 で格納した `.private`（`Algorithm: 18 (MLDSA44)`）、および KSK に対応する標準形式の `.ds` を鍵ディレクトリに用意してください。これらのファイル名は `K<zone>.+018+<keytag>` を基準にします。鍵を生成・DS を作成するツールが MLDSA44 に対応していない場合は、dnspython と cryptography を使って作成してください。署名処理自体は本ツールの Python コードで行います。
 
 `dnssec_make_error_zonefiles.sh` は NSEC と NSEC3 の型ビットマップ不整合について、A に加えて MX と TXT の問い合わせ型を使うゾーンファイルも生成します。NSEC3 のカバー不成立、型ビットマップ不整合、Opt-Out カバー不成立には、次の4つのパラメーター組み合わせを持つゾーンも生成します。
 
