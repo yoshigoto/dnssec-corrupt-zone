@@ -202,6 +202,7 @@ Opt-Out の未署名委任とは別に、AAAA レコードだけを持つ `aaaa.
 | [`dnssec_corrupt_parent_zone.sh`](scripts/dnssec_corrupt_parent_zone.sh) | 親ゾーンファイルを指定モード（`ds-keytag-mismatch`、`ds-hash-mismatch`、`ds-rrsig-corrupt`）で加工し、入力ファイルを更新する |
 | [`dnssec_nsec_corrupt_zone.sh`](scripts/dnssec_nsec_corrupt_zone.sh) | NSEC/NSEC3 ケースを署名・加工する。型ビットマップ用に `--target-type`、NSEC3 用に `--nsec3-iterations`、`--nsec3-salt` を指定できる (省略時の反復回数は 0)。既存の `.signed` は `.signed.orig` に退避される |
 | [`dnssec_add_ds_records.py`](scripts/dnssec_add_ds_records.py) | 親ゾーン内の NS 委任を確認し、鍵ディレクトリの `.ds` ファイルから DS を追加する。親ゾーンファイルを直接更新する |
+| [`dnssec_mldsa_keygen.py`](scripts/dnssec_mldsa_keygen.py) | MLDSA44 (DNSSEC アルゴリズム 18) の KSK/ZSK と、KSK の DS を鍵ディレクトリに生成する |
 
 作業ディレクトリは任意で、例えば一括生成は次のように実行できます。
 
@@ -217,7 +218,15 @@ PYTHON=.venv/bin/python \
 
 `PYTHON` は Python 実行ファイル、`--key-dir DIR` は鍵ディレクトリを指定します。鍵ディレクトリは環境変数 `DNSSEC_KEY_DIR` でも指定でき、`--key-dir` が優先されます。どちらも未指定の場合は、実行時のカレントディレクトリから見た `../keys` です。Python の既定値は `python3` です。スクリプト本体と `corrupt_zone.py` はスクリプトの配置場所を基準に検索します。個別の署名スクリプトでは `DNSSEC_ZONE_DIR` でゾーンディレクトリも指定できます。署名処理は dnspython と cryptography で行います。
 
-シェルスクリプトは MLDSA44 の鍵を生成しません。MLDSA44 を使う場合は、DNSKEY アルゴリズム 18 の `.key`、32 バイトの seed を `PrivateKey:` に Base64 で格納した `.private`（`Algorithm: 18 (MLDSA44)`）、および KSK に対応する標準形式の `.ds` を鍵ディレクトリに用意してください。これらのファイル名は `K<zone>.+018+<keytag>` を基準にします。鍵を生成・DS を作成するツールが MLDSA44 に対応していない場合は、dnspython と cryptography を使って作成してください。署名処理自体は本ツールの Python コードで行います。
+確認した `ldns-keygen` は `MLDSA44` を未知のアルゴリズムとして拒否しました。そのため、dnspython と cryptography を使う `dnssec_mldsa_keygen.py` を用意しています。ゾーン名と出力先を指定すると、KSK (flags 257)、ZSK (flags 256) の `.key` / `.private` と KSK の SHA-256 `.ds` を作成します。
+
+```sh
+PYTHON=.venv/bin/python
+key_dir=/path/to/keys
+"$PYTHON" scripts/dnssec_mldsa_keygen.py example.test --key-directory "$key_dir"
+```
+
+`.private` は `Algorithm: 18 (MLDSA44)` と 32 バイト seed を Base64 化した `PrivateKey:` を含む形式です。秘密鍵ファイルは所有者だけが読み書きできる権限で作成されます。既存ファイルは上書きしないため、鍵ローテーション時は新しいファイルを別途管理してください。生成された鍵は `--key-directory` を使う署名スクリプトや、`.ds` を読む親ゾーン DS 追加処理にそのまま利用できます。
 
 `dnssec_make_error_zonefiles.sh` は NSEC と NSEC3 の型ビットマップ不整合について、A に加えて MX と TXT の問い合わせ型を使うゾーンファイルも生成します。NSEC3 のカバー不成立、型ビットマップ不整合、Opt-Out カバー不成立には、次の4つのパラメーター組み合わせを持つゾーンも生成します。
 
@@ -260,7 +269,7 @@ NSEC/NSEC3 のカバー範囲、NODATA 型ビットマップ、NSEC3 Opt-Out の
 .venv/bin/python -m unittest -v test_corrupt_zone.py
 ```
 
-テストでは、正常な NSEC3 ゾーンの循環チェーン、型ビットマップ、empty non-terminal、委任・glue の扱いと署名を確認してから、加工後も全署名が有効で、指定した NSEC3 RRset だけが変更されることを確認します。署名は対応する 4 アルゴリズムで検証します。`ldns-verify-zone` がある場合は、正常系のゾーン構造を独立した実装でも確認します。
+テストでは、正常な NSEC3 ゾーンの循環チェーン、型ビットマップ、empty non-terminal、委任・glue の扱いと署名を確認してから、加工後も全署名が有効で、指定した NSEC3 RRset だけが変更されることを確認します。署名は対応する DNSSEC アルゴリズムで検証します。`ldns-verify-zone` がある場合は、正常系のゾーン構造を独立した実装でも確認します。
 
 ### Opt-Out ケースの仕組みと比較方法
 
