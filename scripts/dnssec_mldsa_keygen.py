@@ -54,10 +54,13 @@ def generate_keys(origin: dns.name.Name, key_directory: Path, ttl: int) -> list[
     generated: list[Path] = []
     try:
         for flags in (257, 256):
-            private_key = mldsa.MLDSA44PrivateKey.generate()
-            base_name, public, private, ds = key_file_contents(
-                origin, ttl, flags, private_key
-            )
+            while True:
+                private_key = mldsa.MLDSA44PrivateKey.generate()
+                base_name, public, private, ds = key_file_contents(
+                    origin, ttl, flags, private_key
+                )
+                if (key_directory / f"{base_name}.key") not in generated:
+                    break
 
             paths_and_contents = [
                 (key_directory / f"{base_name}.key", public, 0o644),
