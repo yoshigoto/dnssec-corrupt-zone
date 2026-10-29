@@ -256,7 +256,7 @@ sh scripts/dnssec_nsec_corrupt_zone.sh \
 補助スクリプトの引数と鍵選択は、次の回帰テストで確認できます。このテストは外部コマンドをスタブに置き換え、実際の暗号署名は行いません。
 
 ```sh
-python3 -m unittest -v test_shell_scripts.py
+python3 -m unittest -v test_shell_scripts.py test_dnssec_add_ds_records.py
 ```
 
 `ldns-keygen` がある場合は、それで作った実鍵を使って Opt-Out ゾーンを署名・加工し、対象のハッシュが省略されていること、変更した NSEC3 とその RRSIG 以外が維持されることも検証します。コマンドがない場合、その実鍵テストだけスキップします。
