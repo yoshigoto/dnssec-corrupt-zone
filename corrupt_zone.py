@@ -33,6 +33,9 @@ SUPPORTED_ALGORITHMS: dict[int, str] = {
 }
 DEFAULT_SIGNATURE_LIFETIME = 30 * 24 * 60 * 60
 LDNS_KEY_FILE = re.compile(r"^K(?P<domain>.+)\.\+(?P<algorithm>\d{3})\+(?P<key_tag>\d{5})\.key$")
+BASE32HEX_TRANSLATION = str.maketrans(
+    "0123456789ABCDEFGHIJKLMNOPQRSTUV", "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+)
 
 MODES = {
     "success": "成功パターン: 署名済みゾーンをそのまま出力",
@@ -199,9 +202,7 @@ def alter_nsec_coverage(rdata: dns.rdata.Rdata, target: dns.name.Name) -> dns.rd
 
 def nsec3_hash_from_owner(owner: dns.name.Name) -> bytes:
     encoded_hash = owner.labels[0].decode("ascii").upper()
-    normal_base32 = encoded_hash.translate(
-        str.maketrans("0123456789ABCDEFGHIJKLMNOPQRSTUV", "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
-    )
+    normal_base32 = encoded_hash.translate(BASE32HEX_TRANSLATION)
     return base64.b32decode(normal_base32 + "=" * (-len(normal_base32) % 8))
 
 
@@ -219,7 +220,14 @@ def bitmap_contains(rdata: dns.rdata.Rdata, target_type: dns.rdatatype.RdataType
     windows = getattr(rdata, "windows", None)
     if not isinstance(windows, tuple):
         raise TypeError("NSEC または NSEC3 レコードではありません")
-    return target_type in bitmap_rdtypes(windows)
+    window_number, window_offset = divmod(int(target_type), 256)
+    byte_number, bit_offset = divmod(window_offset, 8)
+    for window, bitmap in windows:
+        if window == window_number:
+            return byte_number < len(bitmap) and bool(
+                bitmap[byte_number] & (0x80 >> bit_offset)
+            )
+    return False
 
 
 def decode_private_bytes(value: str) -> bytes:

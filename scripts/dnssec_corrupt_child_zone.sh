@@ -16,7 +16,6 @@ if [ ! -f "$template_file" ]; then
 	exit 1
 fi
 
-script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
 python=${PYTHON:-python3}
 key_directory=${DNSSEC_KEY_DIR:-../keys}
 signing_algorithms="rsasha256 ecdsap256sha256 ed25519 ed448 mldsa44"

@@ -285,6 +285,24 @@ class CorruptZoneTests(unittest.TestCase):
         nsec = self._rdata_at(zone, "aaaa", dns.rdatatype.NSEC)
         self.assertTrue(corrupt_zone.bitmap_contains(nsec, dns.rdatatype.A))
 
+    def test_bitmap_contains_handles_type_windows(self) -> None:
+        zone = dns.zone.from_text(
+            "www 300 IN NSEC next.example. A TYPE257",
+            origin=ORIGIN,
+            relativize=True,
+            check_origin=False,
+        )
+        nsec = self._rdata_at(zone, "www", dns.rdatatype.NSEC)
+
+        self.assertTrue(corrupt_zone.bitmap_contains(nsec, dns.rdatatype.A))
+        self.assertTrue(
+            corrupt_zone.bitmap_contains(nsec, dns.rdatatype.RdataType.make(257))
+        )
+        self.assertFalse(corrupt_zone.bitmap_contains(nsec, dns.rdatatype.AAAA))
+        self.assertFalse(
+            corrupt_zone.bitmap_contains(nsec, dns.rdatatype.RdataType.make(256))
+        )
+
     def test_nsec3_coverage_mismatch(self) -> None:
         zone = self._nsec3_coverage_zone(flags=0)
 
