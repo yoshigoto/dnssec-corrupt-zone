@@ -43,7 +43,7 @@ uv pip install --python .venv/bin/python -r requirements.txt
 | `--target-name`, `-t` | 加工対象の名前（`ds-*`、`nsec-*`、`a-rrsig-corrupt` では必須）。`www` のような相対名は `--origin` を基準に解決し、末尾に `.` がある名前は絶対名として扱います |
 | `--target-type` | 型ビットマップ不整合モードで追加する問い合わせ型（既定値: `A`） |
 | `--zsk-private-key` | `nsec-*` モードで変更した NSEC/NSEC3 RRset を再署名する ZSK の `.private` ファイル。対応アルゴリズムは RSASHA256 (8)、ECDSAP256SHA256 (13)、ED25519 (15)、ED448 (16)、MLDSA44 (18) です。省略時は `--key-directory` から自動選択します |
-| `--key-directory`, `-k` | ldns 互換形式の KSK/ZSK 鍵ファイルがあるディレクトリ。ゾーン名に一致する `K<zone>.+<algorithm>+<keytag>.key` を探し、DNSKEY フラグ 257 を KSK、256 を ZSK として選びます。秘密鍵には同じベース名の `.private` ファイルを使います |
+| `--key-directory`, `-k` | ldns 互換形式の KSK/ZSK 鍵ファイルがあるディレクトリ。入力ファイル名から末尾の `.signed`、次に `.zone` を除いた名前を `<zone>` として `K<zone>.+<algorithm>+<keytag>.key` を探し、DNSKEY フラグ 257 を KSK、256 を ZSK として選びます。秘密鍵には同じベース名の `.private` ファイルを使います |
 | `--sign-zone` | dnspython でゾーンに署名します。`ds-keytag-mismatch` と `ds-hash-mismatch` は署名前に加工し、`ds-rrsig-corrupt`、`dnskey-rrsig-*`、`nsec-*` は署名後に加工します |
 | `--sign-only` | `--sign-zone` と署名後加工モードを併用し、署名だけを行います。署名済みファイルを保存し、別工程で加工する場合に使います |
 | `--nsec3-iterations` | `nsec3-* --sign-zone` で使う NSEC3 反復回数（0〜65535）。省略時は既存の `NSEC3PARAM` の値を使い、なければ 0 にします |
