@@ -1,5 +1,3 @@
 __pycache__/
-*.pyc
-*.pyo
-*.pycache/
+*.py[cod]
 .venv/
